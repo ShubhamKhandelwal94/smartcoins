@@ -109,6 +109,13 @@ tbody tr:hover{background:var(--panel2)}
 .panel{padding:24px;max-width:620px}
 .reveal{max-height:0;overflow:hidden;transition:max-height .4s var(--ease)}
 .reveal.open{max-height:800px}
+/* Member details contains several wide history tables; keep the detail panel usable without clipping. */
+#memberDetailPanel{max-width:none;width:100%;}
+#memberDetailPanel.reveal.open{max-height:none;overflow:visible;}
+#memberHistory{width:100%;overflow-x:auto;}
+#memberHistory table{min-width:900px;}
+#memberHistory h3{margin:24px 0 10px;}
+#memberHistory .result{margin-bottom:20px;}
 .result{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-top:16px}
 .result .big{font-family:"Fraunces",serif;font-size:26px;color:var(--gold)}
 .chip{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11.5px;background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
@@ -121,7 +128,7 @@ tbody tr:hover{background:var(--panel2)}
 .toast.error{border-left-color:var(--danger)}
 @keyframes slidein{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
 
-@media(max-width:780px){.shell{grid-template-columns:1fr}.side{display:none}.main{padding:20px}}
+@media(max-width:780px){.shell{grid-template-columns:1fr}.side{display:none}.main{padding:20px}.formgrid{grid-template-columns:1fr;max-width:none}#memberDetailPanel{padding:16px}#memberDetailPanel .topline{align-items:center;gap:12px}#memberDetailPanel .topline h3{font-size:18px}#memberDetailPanel .btn{white-space:nowrap}}
 </style>
 </head>
 <body>
