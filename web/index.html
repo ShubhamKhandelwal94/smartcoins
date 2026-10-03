@@ -147,11 +147,11 @@ tbody tr:hover{background:var(--panel2)}
   <div class="side">
     <div class="brand">Smart <span class="c">Coins</span></div>
     <nav id="nav">
-      <div class="navbtn active" data-view="dashboard"><span class="dot"></span>Dashboard</div>
-      <div class="navbtn" data-view="members"><span class="dot"></span>Members</div>
+      <div class="navbtn" data-view="dashboard" id="dashboardNavBtn"><span class="dot"></span>Dashboard</div>
+      <div class="navbtn active" data-view="members"><span class="dot"></span>Members</div>
       <div class="navbtn" data-view="earn"><span class="dot"></span>Bill Credit</div>
-      <div class="navbtn" data-view="redeem"><span class="dot"></span>Redemption</div>
-      <div class="navbtn" data-view="reminders"><span class="dot"></span>Reminders</div>
+      <div class="navbtn" data-view="redeem" id="redeemNavBtn"><span class="dot"></span>Bill Redemption</div>
+      <div class="navbtn" data-view="reminders" id="remindersNavBtn"><span class="dot"></span>Reminders</div>
       <div class="navbtn" data-view="users" id="usersNavBtn" style="display:none"><span class="dot"></span>Users</div>
     </nav>
     <div class="spacer"></div>
@@ -160,7 +160,7 @@ tbody tr:hover{background:var(--panel2)}
   </div>
 
   <div class="main">
-    <div class="view active" id="view-dashboard">
+    <div class="view" id="view-dashboard">
       <div class="topline"><h2>Dashboard</h2><button class="btn secondary" onclick="loadDashboard()">Refresh</button></div>
       <div class="hero"><div class="num" id="heroMembers">0</div><div class="label">active members</div></div>
       <div class="stores" id="stores"></div>
@@ -309,6 +309,9 @@ async function doLogin(){
 function logout(){
   TOKEN=''; ROLE=''; USER_STORE=''; localStorage.removeItem('sc_token'); localStorage.removeItem('sc_role'); localStorage.removeItem('sc_store');
   document.getElementById('usersNavBtn').style.display='none';
+  document.getElementById('dashboardNavBtn').style.display='';
+  document.getElementById('remindersNavBtn').style.display='';
+  document.getElementById('redeemNavBtn').style.display='';
   document.getElementById('app').style.display='none';
   document.getElementById('login').style.display='flex';
 }
@@ -318,7 +321,35 @@ function enterApp(){
   document.getElementById('login').style.display='none';
   document.getElementById('app').style.display='block';
   if (ROLE === 'ADMIN') document.getElementById('usersNavBtn').style.display = '';
-  setTodayDates(); applyStoreScope(); loadDashboard(); searchMembers();
+  setTodayDates(); applyStoreScope(); applyRoleNavigation(); searchMembers();
+}
+
+
+function applyRoleNavigation(){
+  const dashboard = document.getElementById('dashboardNavBtn');
+  const reminders = document.getElementById('remindersNavBtn');
+  const users = document.getElementById('usersNavBtn');
+  const redeem = document.getElementById('redeemNavBtn');
+  if(ROLE === 'ADMIN'){
+    dashboard.style.display = '';
+    reminders.style.display = '';
+    users.style.display = '';
+    redeem.style.display = '';
+    document.getElementById('view-members').classList.remove('active');
+    document.getElementById('view-dashboard').classList.add('active');
+    document.querySelectorAll('.navbtn[data-view]').forEach(x=>x.classList.remove('active'));
+    dashboard.classList.add('active');
+  } else {
+    // Staff have exactly three operational sections.
+    dashboard.style.display = 'none';
+    reminders.style.display = 'none';
+    users.style.display = 'none';
+    redeem.style.display = USER_STORE === 'SMART' ? 'none' : '';
+    document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.navbtn[data-view]').forEach(x=>x.classList.remove('active'));
+    document.getElementById('view-members').classList.add('active');
+    document.querySelector('[data-view=members]').classList.add('active');
+  }
 }
 
 document.querySelectorAll('.navbtn[data-view]').forEach(b=>{
@@ -388,7 +419,7 @@ function setTodayDates(){ const d=new Date().toISOString().slice(0,10); e_date.v
 function applyStoreScope(){
   if(ROLE==='ADMIN') return;
   if(USER_STORE){ e_store.value=USER_STORE; e_store.disabled=true; }
-  if(USER_STORE==='SMART'){ document.querySelector('[data-view=redeem]').style.display='none'; }
+  if(USER_STORE==='SMART'){ r_store.value='KIDS'; r_store.disabled=true; }
   else { r_store.value=USER_STORE; r_store.disabled=true; }
 }
 function onlyDigits10(el){ el.value=el.value.replace(/\D/g,'').slice(0,10); }

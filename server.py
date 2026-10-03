@@ -223,7 +223,10 @@ def earn(x: EarnReq, authorization: str | None = Header(None)):
 
 @app.get('/redeem/preview')
 def preview(card_no: str, amount: float, authorization: str | None = Header(None)):
-    u = auth(authorization); expire_old(); m = member(card_no); credited, eligible, _ = balances(m['_id'])
+    u = auth(authorization); expire_old()
+    if u.get('role') != 'ADMIN' and u.get('store') == 'SMART':
+        raise HTTPException(403, 'Redemption is disabled at S-Mart.')
+    m = member(card_no); credited, eligible, _ = balances(m['_id'])
     maximum = max(0, min(eligible, int((amount / 5) * COINS_PER_RUPEE), credited - 1))
     return {'credited': credited, 'eligible': eligible, 'maximum_coins': maximum, 'maximum_value': maximum / COINS_PER_RUPEE}
 
@@ -291,7 +294,7 @@ def receipt(filename: str, authorization: str | None = Header(None)):
 
 @app.get('/dashboard')
 def dashboard(authorization: str | None = Header(None)):
-    u = auth(authorization); expire_old(); rows = []
+    u = auth(authorization); require_admin(u); expire_old(); rows = []
     for code, s in STORES.items():
         e = list(db.earnings.aggregate([{'$match': {'store': code, 'status': {'$ne': 'REVERSED'}}}, {'$group': {'_id': None, 'sales': {'$sum': '$amount'}, 'coins': {'$sum': '$coins'}}}]))
         r = list(db.redemptions.aggregate([{'$match': {'store': code, 'status': 'COMPLETED'}}, {'$group': {'_id': None, 'count': {'$sum': 1}, 'value': {'$sum': '$value'}, 'fresh': {'$sum': '$fresh_coins'}}}]))
@@ -300,7 +303,7 @@ def dashboard(authorization: str | None = Header(None)):
 
 @app.get('/reminders/inactive')
 def inactive_members(days: int = 90, authorization: str | None = Header(None)):
-    auth(authorization); expire_old(); cutoff = iso(today() - timedelta(days=days)); out = []
+    u = auth(authorization); require_admin(u); expire_old(); cutoff = iso(today() - timedelta(days=days)); out = []
     for m in db.members.find({'active': True}):
         dates = [r['bill_date'] for r in db.earnings.find({'member_id': m['_id']}, {'bill_date': 1})]
         dates += [r['bill_date'] for r in db.redemptions.find({'member_id': m['_id']}, {'bill_date': 1})]
