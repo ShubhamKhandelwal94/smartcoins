@@ -14,10 +14,7 @@ render.yaml          # One-click free-tier deploy config for Render
 ## Run it
 
 ```bash
-python -m pip install -r requirements.txt
-export MONGODB_URI='mongodb+srv://rahar:rahar@cluster0.fw1osbv.mongodb.net/smart_coins'
-export MONGODB_DB='smart_coins'
-python -m uvicorn server:app --host 0.0.0.0 --port 8000
+
 ```
 
 Then open `http://localhost:8000/` in a browser — that's the whole app, API and UI together on one URL. `MONGODB_URI` has no built-in fallback; the server refuses to start without it.
