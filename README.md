@@ -14,19 +14,15 @@ render.yaml          # One-click free-tier deploy config for Render
 ## Run it
 
 ```bash
-<<<<<<< HEAD
-
-=======
 python -m pip install -r requirements.txt
 export MONGODB_URI='mongodb+srv://rahar:rG9pyXZtQBEEIgWu@cluster0.fw1osbv.mongodb.net/smart_coins?authSource=admin'
 export MONGODB_DB='smart_coins'
 python -m uvicorn server:app --host 0.0.0.0 --port 8000
->>>>>>> c64d41e (Added fixes)
 ```
 
 Then open `http://localhost:8000/` in a browser — that's the whole app, API and UI together on one URL. `MONGODB_URI` has no built-in fallback; the server refuses to start without it.
 
-Default login: `admin` / `admin`. Change it before putting this in front of real staff.
+Required outlet/admin logins are provisioned on startup: `SMART` / `QWERTY`, `KIDS` / `ASDFGH`, `INSIGNIA` / `ZXCVBN`, and `GOVIND` / `Govind@123`. Passwords are stored as hashes. The legacy generic `admin` account is deactivated so it cannot bypass outlet scoping.
 
 ## Hosting it for free (Render)
 This repo includes `render.yaml`, so Render reads it automatically.
@@ -37,6 +33,18 @@ This repo includes `render.yaml`, so Render reads it automatically.
 4. In MongoDB Atlas, go to **Network Access > Add IP Address > Allow Access from Anywhere** (`0.0.0.0/0`) — Render's free tier has no fixed outbound IP, so Atlas can't be locked to one address.
 5. Deploy. Render gives you a URL like `https://smart-coins-api.onrender.com` — open it in a browser, that's the app.
 6. **Free-tier trade-off:** the service sleeps after ~15 minutes idle; the first request after a quiet spell takes 30-60 seconds to wake up, then it's normal speed until idle again.
+
+## PDF change set implemented
+
+The current build applies the supplied SKG ONE change list: manual unique physical card numbers; exact 10-digit mobile validation; admin-only member editing; automatic current-date billing/redemption for normal users with admin back-date capability; automatic member refresh after transactions; S-Mart redemption lock; outlet-scoped logins; complete admin member history; admin reversal/correction with retained audit trail; and user/date/time recording for transactions.
+
+The required logins are:
+- S-Mart: `SMART` / `QWERTY`
+- Kids World: `KIDS` / `ASDFGH`
+- Insignia 360: `INSIGNIA` / `ZXCVBN`
+- Admin: `GOVIND` / `Govind@123`
+
+Store users can create members and process only their own outlet's transactions. They cannot edit members, reverse/delete transactions, or redeem at S-Mart. Admin can edit member details, view complete history, and perform controlled reversals; original records remain in the audit trail.
 
 ## Rules implemented
 - S-Mart ₹10=1 coin; Kids World ₹10=2; Insignia 360 ₹10=3.
