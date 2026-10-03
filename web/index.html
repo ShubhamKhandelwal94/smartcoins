@@ -107,8 +107,8 @@ tbody tr:hover{background:var(--panel2)}
 .formgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 24px;max-width:560px}
 .formgrid .full{grid-column:1/-1}
 .panel{padding:24px;max-width:620px}
-.reveal{max-height:0;overflow:hidden;transition:max-height .35s var(--ease)}
-.reveal.open{max-height:220px}
+.reveal{max-height:0;overflow:hidden;transition:max-height .4s var(--ease)}
+.reveal.open{max-height:800px}
 .result{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-top:16px}
 .result .big{font-family:"Fraunces",serif;font-size:26px;color:var(--gold)}
 .chip{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11.5px;background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
@@ -152,6 +152,7 @@ tbody tr:hover{background:var(--panel2)}
       <div class="navbtn" data-view="earn"><span class="dot"></span>Bill Credit</div>
       <div class="navbtn" data-view="redeem"><span class="dot"></span>Redemption</div>
       <div class="navbtn" data-view="reminders"><span class="dot"></span>Reminders</div>
+      <div class="navbtn" data-view="users" id="usersNavBtn" style="display:none"><span class="dot"></span>Users</div>
     </nav>
     <div class="spacer"></div>
     <div class="who">Signed in as <b id="whoName"></b></div>
@@ -227,6 +228,24 @@ tbody tr:hover{background:var(--panel2)}
       <table><thead><tr><th>Card</th><th>Name</th><th>Last transaction</th><th>Eligible</th><th></th></tr></thead>
         <tbody id="rrows"></tbody></table>
     </div>
+
+    <div class="view" id="view-users">
+      <div class="topline"><h2>Users</h2><button class="btn" onclick="openNewUser()">New user</button></div>
+      <p style="color:var(--muted);font-size:13px;max-width:560px">Who can sign in to this terminal. Admins can create and deactivate logins; at least one active admin must always remain.</p>
+      <table><thead><tr><th>Username</th><th>Role</th><th>Status</th><th></th></tr></thead>
+        <tbody id="urows"></tbody></table>
+      <div class="panel reveal" id="newUserPanel" style="margin-top:20px;padding:0">
+        <div class="panel card">
+          <h3 style="margin-top:0">New user</h3>
+          <div class="formgrid">
+            <div><label>Username</label><input id="nu_username"></div>
+            <div><label>Password</label><input id="nu_password" type="password"></div>
+            <div><label>Role</label><select id="nu_role"><option value="STAFF">Staff</option><option value="ADMIN">Admin</option></select></div>
+          </div>
+          <button class="btn" style="margin-top:20px" onclick="createUser()">Create user</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 </div>
@@ -237,6 +256,7 @@ tbody tr:hover{background:var(--panel2)}
 let API = localStorage.getItem('sc_api') || '';
 let TOKEN = localStorage.getItem('sc_token') || '';
 let USER = localStorage.getItem('sc_user') || '';
+let ROLE = localStorage.getItem('sc_role') || '';
 
 function toast(msg, isError){
   const el = document.createElement('div');
@@ -266,14 +286,15 @@ async function doLogin(){
     const r = await fetch(API + '/login', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username:u, password:p})});
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || 'Login failed');
-    TOKEN = d.token; USER = d.username;
-    localStorage.setItem('sc_api', API); localStorage.setItem('sc_token', TOKEN); localStorage.setItem('sc_user', USER);
+    TOKEN = d.token; USER = d.username; ROLE = d.role;
+    localStorage.setItem('sc_api', API); localStorage.setItem('sc_token', TOKEN); localStorage.setItem('sc_user', USER); localStorage.setItem('sc_role', ROLE);
     enterApp();
   }catch(e){ err.textContent = e.message; }
   finally{ btn.disabled = false; btn.textContent = 'Sign in'; }
 }
 function logout(){
-  TOKEN=''; localStorage.removeItem('sc_token');
+  TOKEN=''; ROLE=''; localStorage.removeItem('sc_token'); localStorage.removeItem('sc_role');
+  document.getElementById('usersNavBtn').style.display='none';
   document.getElementById('app').style.display='none';
   document.getElementById('login').style.display='flex';
 }
@@ -282,6 +303,7 @@ function enterApp(){
   document.getElementById('whoName').textContent = USER;
   document.getElementById('login').style.display='none';
   document.getElementById('app').style.display='block';
+  if (ROLE === 'ADMIN') document.getElementById('usersNavBtn').style.display = '';
   loadDashboard(); searchMembers();
 }
 
@@ -396,6 +418,31 @@ async function loadReminders(){
     if (!d.length) tb.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No inactive members in this window</td></tr>';
   }catch(e){ toast(e.message, true); }
 }
+
+function openNewUser(){ document.getElementById('newUserPanel').classList.add('open'); }
+async function loadUsers(){
+  try{
+    const d = await api('/users');
+    document.getElementById('urows').innerHTML = d.map(x=>`<tr>
+      <td>${x.username}</td><td>${x.role}</td>
+      <td>${x.active ? 'Active' : 'Inactive'}</td>
+      <td>${x.username===USER ? '' : `<a href="#" onclick="toggleUser('${x.username}');return false">${x.active?'Deactivate':'Activate'}</a>`}</td></tr>`).join('');
+  }catch(e){ toast(e.message, true); }
+}
+async function createUser(){
+  try{
+    const body = {username:nu_username.value, password:nu_password.value, role:nu_role.value};
+    await api('/users', {method:'POST', body: JSON.stringify(body)});
+    toast('User created'); nu_username.value=nu_password.value='';
+    document.getElementById('newUserPanel').classList.remove('open');
+    loadUsers();
+  }catch(e){ toast(e.message, true); }
+}
+async function toggleUser(username){
+  try{ const d = await api('/users/'+encodeURIComponent(username)+'/toggle', {method:'POST'}); toast(username+(d.active?' activated':' deactivated')); loadUsers(); }
+  catch(e){ toast(e.message, true); }
+}
+document.querySelector('.navbtn[data-view="users"]').addEventListener('click', loadUsers);
 
 if (TOKEN && API) enterApp();
 </script>

@@ -3,11 +3,11 @@ from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Optional
 from urllib.parse import quote
-from fastapi import FastAPI, HTTPException, Header
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pymongo import MongoClient, ASCENDING, DESCENDING
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, PyMongoError
 from reportlab.pdfgen import canvas
 
 BASE = Path(__file__).resolve().parent; RECEIPTS = BASE / 'receipts'; RECEIPTS.mkdir(exist_ok=True)
@@ -18,6 +18,14 @@ if not MONGODB_URI:
 client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=10000)
 db = client[MONGODB_DB]
 app = FastAPI(title='Smart Coins Central API', version='3.0.0')
+
+@app.exception_handler(PyMongoError)
+def db_error_handler(request: Request, exc: PyMongoError):
+    return JSONResponse(status_code=503, content={'detail': 'Database temporarily unavailable. Please try again in a moment.'})
+
+@app.exception_handler(Exception)
+def generic_error_handler(request: Request, exc: Exception):
+    return JSONResponse(status_code=500, content={'detail': 'Something went wrong on the server. Please try again, and let an admin know if it keeps happening.'})
 STORES = {
     'SMART': {'name': 'S-Mart', 'percentage': 1.0, 'coins_per_10': 1},
     'KIDS': {'name': 'Kids World', 'percentage': 1.0, 'coins_per_10': 2},
@@ -49,6 +57,7 @@ class LoginReq(BaseModel): username:str; password:str
 class MemberReq(BaseModel): name:str; mobile:str; email:str=''; address:str=''; dob:str=''; anniversary:str=''
 class EarnReq(BaseModel): card_no:str; bill_no:str; bill_date:str; amount:float=Field(gt=0); store:str
 class RedeemReq(BaseModel): card_no:str; bill_no:str; bill_date:str; amount:float=Field(gt=0); store:str; requested_value:Optional[float]=None
+class UserReq(BaseModel): username:str; password:str; role:str='STAFF'
 
 def now(): return datetime.utcnow()
 def today(): return date.today()
@@ -57,6 +66,9 @@ def add_year(d):
     try:return d.replace(year=d.year+1)
     except ValueError:return d.replace(year=d.year+1,day=28)
 def hashpw(p,s): return hashlib.pbkdf2_hmac('sha256',p.encode(),s.encode(),180000).hex()
+def parse_date(s):
+    try: return datetime.strptime(s,'%Y-%m-%d').date()
+    except (ValueError,TypeError): raise HTTPException(400,f"Invalid bill date '{s}' — expected format YYYY-MM-DD.")
 def audit(event,ref,details,uid=None): db.audit.insert_one({'event':event,'ref':ref,'details':details,'user_id':uid,'created_at':now()})
 def auth(a):
     if not a or not a.startswith('Bearer '): raise HTTPException(401,'Login required')
@@ -121,7 +133,7 @@ def earn(x:EarnReq,authorization:str|None=Header(None)):
     u=auth(authorization); expire_old()
     if x.amount<500: raise HTTPException(400,'Minimum bill for earning is ₹500.')
     if x.store not in STORES: raise HTTPException(400,'Invalid store')
-    m=member(x.card_no); d=datetime.strptime(x.bill_date,'%Y-%m-%d').date()
+    m=member(x.card_no); d=parse_date(x.bill_date)
     if d>today(): raise HTTPException(400,'Bill date cannot be in the future')
     if db.earnings.find_one({'bill_no':x.bill_no}) or db.redemptions.find_one({'bill_no':x.bill_no}): raise HTTPException(409,'Bill number already used.')
     coins=int((x.amount/10)*STORES[x.store]['coins_per_10']); lot={'member_id':m['_id'],'source_type':'PURCHASE','bill_no':x.bill_no,'bill_date':iso(d),'amount':x.amount,'coins':coins,'remaining_coins':coins,'available_on':iso(d+timedelta(days=1)),'expiry_on':iso(add_year(d)),'store':x.store,'status':'ACTIVE','created_by':u['_id'],'created_at':now()}
@@ -134,7 +146,7 @@ def redeem(x:RedeemReq,authorization:str|None=Header(None)):
     u=auth(authorization); expire_old()
     if x.amount<500: raise HTTPException(400,'Minimum bill for redemption is ₹500.')
     if x.store not in STORES: raise HTTPException(400,'Invalid store')
-    m=member(x.card_no); d=datetime.strptime(x.bill_date,'%Y-%m-%d').date(); credited,eligible,_=balances(m['_id']); maxcoins=max(0,min(eligible,int((x.amount/5)*COINS_PER_RUPEE),credited-1))
+    m=member(x.card_no); d=parse_date(x.bill_date); credited,eligible,_=balances(m['_id']); maxcoins=max(0,min(eligible,int((x.amount/5)*COINS_PER_RUPEE),credited-1))
     if x.requested_value is None: coins=maxcoins
     else: coins=int(x.requested_value*COINS_PER_RUPEE)
     if coins<=0: raise HTTPException(400,'No redeemable Smart Coins available.')
@@ -183,10 +195,43 @@ def inactive_members(days:int=90,authorization:str|None=Header(None)):
         out.append({'card_no':m['card_no'],'name':m['name'],'mobile':m['mobile'],'last_transaction':last or None,'eligible_coins':eligible,'message':text,'whatsapp_link':whatsapp_link(m['mobile'],text)})
     out.sort(key=lambda r:r['last_transaction'] or '')
     return out
+def require_admin(u):
+    if u['role'] != 'ADMIN':
+        raise HTTPException(403, 'Admin only')
+
+@app.get('/users')
+def list_users(authorization:str|None=Header(None)):
+    u=auth(authorization); require_admin(u)
+    return [{'username':x['username'],'role':x['role'],'active':x['active']} for x in db.users.find().sort('username',ASCENDING)]
+
+@app.post('/users')
+def create_user(x:UserReq,authorization:str|None=Header(None)):
+    u=auth(authorization); require_admin(u)
+    username=x.username.strip()
+    if not username or not x.password: raise HTTPException(400,'Username and password are required.')
+    if x.role not in ('ADMIN','STAFF'): raise HTTPException(400,'Role must be ADMIN or STAFF.')
+    if db.users.find_one({'username':username}): raise HTTPException(409,'That username already exists.')
+    salt=secrets.token_hex(16)
+    db.users.insert_one({'username':username,'password_hash':hashpw(x.password,salt),'salt':salt,'role':x.role,'active':True,'created_at':now()})
+    audit('USER_CREATE',username,x.role,u['_id'])
+    return {'username':username,'role':x.role}
+
+@app.post('/users/{username}/toggle')
+def toggle_user(username:str,authorization:str|None=Header(None)):
+    u=auth(authorization); require_admin(u)
+    target=db.users.find_one({'username':username})
+    if not target: raise HTTPException(404,'User not found')
+    if target['username']==u['username']: raise HTTPException(400,"You can't deactivate your own account.")
+    new_active = not target['active']
+    if not new_active and target['role']=='ADMIN' and db.users.count_documents({'role':'ADMIN','active':True})<=1:
+        raise HTTPException(400,'At least one active admin must remain.')
+    db.users.update_one({'_id':target['_id']},{'$set':{'active':new_active}})
+    audit('USER_TOGGLE',username,f'active={new_active}',u['_id'])
+    return {'username':username,'active':new_active}
+
 @app.post('/backup')
 def backup(authorization:str|None=Header(None)):
-    u=auth(authorization)
-    if u['role']!='ADMIN': raise HTTPException(403,'Admin only')
+    u=auth(authorization); require_admin(u)
     out=BASE/'mongo_backups'/datetime.now().strftime('%Y%m%d_%H%M%S'); out.mkdir(parents=True,exist_ok=True)
     try: subprocess.run(['mongodump','--uri',MONGODB_URI,'--db',MONGODB_DB,'--out',str(out)],check=True,capture_output=True,text=True)
     except FileNotFoundError: raise HTTPException(500,'mongodump is not installed on the server')

@@ -14,7 +14,14 @@ render.yaml          # One-click free-tier deploy config for Render
 ## Run it
 
 ```bash
+<<<<<<< HEAD
 
+=======
+python -m pip install -r requirements.txt
+export MONGODB_URI='mongodb+srv://rahar:rG9pyXZtQBEEIgWu@cluster0.fw1osbv.mongodb.net/smart_coins?authSource=admin'
+export MONGODB_DB='smart_coins'
+python -m uvicorn server:app --host 0.0.0.0 --port 8000
+>>>>>>> c64d41e (Added fixes)
 ```
 
 Then open `http://localhost:8000/` in a browser — that's the whole app, API and UI together on one URL. `MONGODB_URI` has no built-in fallback; the server refuses to start without it.
@@ -51,6 +58,13 @@ The **Reminders** section of the web UI (backed by `GET /reminders/inactive?days
 - **Not implemented here on purpose:** unofficial bulk-automation libraries that drive your own WhatsApp Web session (e.g. `whatsapp-web.js`, `pywhatkit`) are technically free but violate WhatsApp's Terms of Service for business/bulk messaging and risk the number being permanently banned — not something worth risking on a number your stores depend on.
 
 Configure with two optional environment variables: `WHATSAPP_COUNTRY_CODE` (default `91`) and `REMINDER_MESSAGE_TEMPLATE` (default greets the member by name and mentions their eligible coin balance and card number; supports `{name}`, `{card_no}`, `{eligible}`, `{credited}`).
+
+## Who can log in (user management)
+There's no longer just the one shared `admin` login. Admins see a **Users** tab in the web UI to create logins for other staff, each with a role:
+- **Admin** — everything, including managing other users and running backups.
+- **Staff** — everyday use (members, bill credit, redemption, reminders) but can't manage users or run backups.
+
+The system always keeps at least one active admin — you can't deactivate the last one, and you can't deactivate your own account (ask another admin to do that, if needed). The original `admin`/`admin` bootstrap account still gets created automatically on first run if no users exist yet; change its password or create a named admin account for yourself and deactivate it once you have.
 
 ## Backups
 `POST /backup` (admin only) runs `mongodump` on the server and writes a timestamped folder under `mongo_backups/`. Requires `mongodump` to be installed wherever the server runs; Render's free tier does not have it preinstalled, so treat this as a local/VPS-only feature unless you add it to the build step.
