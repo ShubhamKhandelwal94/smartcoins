@@ -128,6 +128,8 @@ tbody tr:hover{background:var(--panel2)}
 .toast.error{border-left-color:var(--danger)}
 @keyframes slidein{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
 
+
+.reminder-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:16px;margin:16px 0}.reminder-card{padding:18px}.section-title{font-weight:800;margin-bottom:12px}.wa-preview{white-space:pre-wrap;line-height:1.65;background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:14px;padding:18px;min-height:220px}.trigger-note{font-size:12px;color:var(--muted);line-height:1.5;margin-top:12px}@media(max-width:900px){.reminder-grid{grid-template-columns:1fr}}
 @media(max-width:780px){.shell{grid-template-columns:1fr}.side{display:none}.main{padding:20px}.formgrid{grid-template-columns:1fr;max-width:none}#memberDetailPanel{padding:16px}#memberDetailPanel .topline{align-items:center;gap:12px}#memberDetailPanel .topline h3{font-size:18px}#memberDetailPanel .btn{white-space:nowrap}}
 </style>
 </head>
@@ -241,10 +243,25 @@ tbody tr:hover{background:var(--panel2)}
     </div>
 
     <div class="view" id="view-reminders">
-      <div class="topline"><h2>Reminders</h2></div>
-      <p style="color:var(--muted);font-size:13px;max-width:560px">Click a member's WhatsApp link to open a pre-filled chat — this is a manual, free send; nothing goes out automatically.</p>
-      <div class="toolbar"><label style="margin:0">Inactive for</label><input id="remDays" type="number" value="90" style="width:80px"><button class="btn secondary" onclick="loadReminders()">Find inactive members</button></div>
-      <table><thead><tr><th>Card</th><th>Name</th><th>Last transaction</th><th>Eligible</th><th></th></tr></thead>
+      <div class="topline"><h2>WhatsApp Reminders</h2></div>
+      <p style="color:var(--muted);font-size:13px;max-width:760px">Manage SKG ONE WhatsApp communication templates and review members who qualify for reminders. Select a template to preview the message and open WhatsApp with a personalised message.</p>
+      <div class="toolbar" style="align-items:end">
+        <div><label style="margin:0">Template</label><select id="remTemplate" style="min-width:280px"></select></div>
+        <button class="btn secondary" onclick="previewReminderTemplate()">Preview</button>
+      </div>
+      <div class="reminder-grid">
+        <div class="card reminder-card">
+          <div class="section-title">Message Preview</div>
+          <div id="reminderPreview" class="wa-preview">Select a reminder template to preview the WhatsApp message.</div>
+          <div id="reminderTrigger" class="trigger-note"></div>
+        </div>
+        <div class="card reminder-card">
+          <div class="section-title">40-Day No Transaction</div>
+          <div class="toolbar" style="margin:0 0 12px"><label style="margin:0">No transaction for</label><input id="remDays" type="number" value="40" min="1" style="width:80px"><button class="btn secondary" onclick="loadReminders()">Find members</button></div>
+          <div class="trigger-note">Trigger: automatically qualifies members after 40 days without a bill credit or redemption. WhatsApp sending requires a connected WhatsApp Business provider; until then, use the pre-filled WhatsApp link.</div>
+        </div>
+      </div>
+      <table><thead><tr><th>Card</th><th>Name</th><th>Last transaction</th><th>Eligible</th><th>WhatsApp</th></tr></thead>
         <tbody id="rrows"></tbody></table>
     </div>
 
@@ -328,7 +345,7 @@ function enterApp(){
   document.getElementById('login').style.display='none';
   document.getElementById('app').style.display='block';
   if (ROLE === 'ADMIN') document.getElementById('usersNavBtn').style.display = '';
-  setTodayDates(); applyStoreScope(); applyRoleNavigation(); searchMembers();
+  setTodayDates(); applyStoreScope(); applyRoleNavigation(); searchMembers(); if(ROLE === 'ADMIN') loadReminderTemplates();
 }
 
 
@@ -468,18 +485,35 @@ async function downloadReceipt(name){
   setTimeout(()=>URL.revokeObjectURL(url), 5000);
 }
 
+async function loadReminderTemplates(){
+  try{
+    const templates = await api('/reminders/templates');
+    const select = document.getElementById('remTemplate');
+    select.innerHTML = templates.map(t => `<option value="${t.key}">${t.title}</option>`).join('');
+    select.onchange = previewReminderTemplate;
+    previewReminderTemplate();
+  }catch(e){ toast(e.message, true); }
+}
+let reminderTemplatesCache = [];
+async function previewReminderTemplate(){
+  try{
+    if(!reminderTemplatesCache.length) reminderTemplatesCache = await api('/reminders/templates');
+    const key = document.getElementById('remTemplate').value;
+    const t = reminderTemplatesCache.find(x=>x.key===key);
+    if(!t) return;
+    document.getElementById('reminderPreview').textContent = t.message;
+    document.getElementById('reminderTrigger').textContent = 'Trigger: ' + t.trigger;
+  }catch(e){ toast(e.message, true); }
+}
 async function loadReminders(){
   try{
-    const d = await api('/reminders/inactive?days=' + (remDays.value||90));
-    const tb = document.getElementById('rrows'); tb.innerHTML='';
+    const d = await api('/reminders/inactive?days=' + (remDays.value||40)); const tb = document.getElementById('rrows'); tb.innerHTML='';
     d.forEach((m,i)=>{
-      const tr = document.createElement('tr');
-      tr.style.opacity=0; tr.style.animation = `fadein .3s var(--ease) ${i*0.03}s forwards`;
-      tr.innerHTML = `<td>${m.card_no}</td><td>${m.name}</td><td>${m.last_transaction||'Never'}</td><td>${m.eligible_coins}</td>
-        <td><a href="${m.whatsapp_link}" target="_blank">Open WhatsApp</a></td>`;
+      const tr = document.createElement('tr'); tr.style.opacity=0; tr.style.animation = `fadein .3s var(--ease) ${i*0.03}s forwards`;
+      tr.innerHTML = `<td>${m.card_no}</td><td>${m.name}</td><td>${m.last_transaction||'Never'}</td><td>${m.eligible_coins}</td><td><a href="${m.whatsapp_link}" target="_blank">Open WhatsApp</a></td>`;
       tb.appendChild(tr);
     });
-    if (!d.length) tb.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No inactive members in this window</td></tr>';
+    if (!d.length) tb.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No members qualify for this reminder window</td></tr>';
   }catch(e){ toast(e.message, true); }
 }
 

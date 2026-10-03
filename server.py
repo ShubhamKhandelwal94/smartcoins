@@ -38,6 +38,57 @@ WHATSAPP_COUNTRY_CODE = os.getenv('WHATSAPP_COUNTRY_CODE', '91')
 REMINDER_MESSAGE_TEMPLATE = os.getenv('REMINDER_MESSAGE_TEMPLATE',
     "Hi {name}! We miss you at Smart Coins. You have {eligible} eligible coins waiting on card {card_no} — come shop with us soon before they expire. 🙂")
 
+WHATSAPP_REMINDER_TEMPLATES = {
+    'MEMBERSHIP_CREATED': {
+        'title': 'Membership Created', 'trigger': 'Immediately after a membership is created',
+        'message': "Welcome, {{NAME}}! 🎉 Your SKG ONE Lifetime Membership is now active.\n\nYour membership unlocks benefits across S-MART, KIDS WORLD and INSIGNIA 360° ROOFTOP RESTAURANT.\n\nMembership No.: {{MEMBER_NO}}\n\nShop at S-MART, discover something special at KIDS WORLD, or enjoy a memorable experience at INSIGNIA 360° ROOFTOP RESTAURANT.\n\nYour SKG ONE benefits are ready whenever you are. ✨"
+    },
+    'SMART_COINS_EARNED': {
+        'title': 'Smart Coins Earned', 'trigger': 'Immediately after a successful bill credit',
+        'message': "Good news, {{NAME}}! 🪙 You’ve earned {{COINS}} Smart Coins on your ₹{{AMOUNT}} purchase at {{BUSINESS}}.\n\nAvailable from tomorrow.\n\nCurrent Smart Coin Balance: {{BALANCE}}\n\nUse your SKG ONE benefits across S-MART, KIDS WORLD and INSIGNIA 360° ROOFTOP RESTAURANT.\n\nKeep earning, keep enjoying! ✨"
+    },
+    'SMART_COINS_REDEEMED': {
+        'title': 'Smart Coins Redeemed', 'trigger': 'Immediately after a successful redemption',
+        'message': "{{NAME}}, your Smart Coins have been redeemed successfully. 🎁\n\nYou’ve redeemed {{COINS}} Smart Coins worth ₹{{COINS}} at {{BUSINESS}}.\n\nRemaining Smart Coin Balance: {{BALANCE}}\n\nContinue enjoying the SKG ONE experience across S-MART, KIDS WORLD and INSIGNIA 360° ROOFTOP RESTAURANT.\n\nEnjoy your SKG ONE benefits! ✨"
+    },
+    'SMART_COINS_EXPIRING_30': {
+        'title': 'Smart Coins Expiring — 30 Days', 'trigger': '30 days before eligible Smart Coins expire',
+        'message': "{{NAME}}, your Smart Coins are expiring soon. ⏳\n\nYou have {{COINS}} Smart Coins worth ₹{{COINS}} expiring on {{DATE}}.\n\nUse them at KIDS WORLD or INSIGNIA 360° ROOFTOP RESTAURANT before they expire.\n\nAnd while you’re there, remember that your SKG ONE membership also brings benefits at S-MART.\n\nDon’t let your benefits go unused! ✨"
+    },
+    'SMART_COINS_EXPIRING_7': {
+        'title': 'Smart Coins Expiring — 7 Days', 'trigger': '7 days before eligible Smart Coins expire',
+        'message': "Important reminder, {{NAME}}! ⏰ Your {{COINS}} Smart Coins worth ₹{{COINS}} will expire on {{DATE}}.\n\nUse them before they expire at KIDS WORLD or INSIGNIA 360° ROOFTOP RESTAURANT.\n\nKeep enjoying the complete SKG ONE experience across S-MART, KIDS WORLD and INSIGNIA 360° ROOFTOP RESTAURANT.\n\nMake your Smart Coins count! 🪙"
+    },
+    'BIRTHDAY_7': {
+        'title': 'Birthday — 7 Days Before', 'trigger': '7 days before the member’s birthday',
+        'message': "Your special day is just 7 days away, {{NAME}}! 🎂\n\nStart planning something special with SKG ONE.\n\nCelebrate with your loved ones at INSIGNIA 360° ROOFTOP RESTAURANT, or find a special gift at KIDS WORLD.\n\nAnd remember, your SKG ONE benefits are also available at S-MART.\n\nHere’s to a celebration worth remembering! ✨"
+    },
+    'BIRTHDAY_2': {
+        'title': 'Birthday — 2 Days Before', 'trigger': '2 days before the member’s birthday',
+        'message': "Only 2 days to go, {{NAME}}! 🎉 Your birthday is almost here.\n\nMake it memorable with a special celebration at INSIGNIA 360° ROOFTOP RESTAURANT or discover something special at KIDS WORLD.\n\nYour SKG ONE membership keeps bringing you more across S-MART, KIDS WORLD and INSIGNIA 360° ROOFTOP RESTAURANT.\n\nYour celebration starts here! 🥳"
+    },
+    'BIRTHDAY_TODAY': {
+        'title': 'Birthday — Today', 'trigger': 'On the member’s birthday',
+        'message': "Happy Birthday, {{NAME}}! 🎂🎈\n\nWishing you happiness, success and a wonderful year ahead.\n\nCelebrate your special day at INSIGNIA 360° ROOFTOP RESTAURANT, choose a special gift from KIDS WORLD, or enjoy your everyday shopping at S-MART.\n\nHave a wonderful celebration with SKG ONE! ✨\n\nDon’t forget to enjoy your SKG ONE benefits!"
+    },
+    'ANNIVERSARY_7': {
+        'title': 'Marriage Anniversary — 7 Days Before', 'trigger': '7 days before the member’s marriage anniversary',
+        'message': "Your special anniversary is just 7 days away, {{NAME}}! ❤️\n\nMake the occasion memorable with SKG ONE.\n\nPlan a special evening at INSIGNIA 360° ROOFTOP RESTAURANT or choose something special for your loved one at KIDS WORLD.\n\nAnd don’t forget, your SKG ONE benefits are also available at S-MART.\n\nHere’s to beautiful moments together! ✨"
+    },
+    'ANNIVERSARY_2': {
+        'title': 'Marriage Anniversary — 2 Days Before', 'trigger': '2 days before the member’s marriage anniversary',
+        'message': "Only 2 days to go, {{NAME}}! ❤️ Your anniversary is almost here.\n\nCelebrate your special occasion at INSIGNIA 360° ROOFTOP RESTAURANT or surprise your loved one with something special from KIDS WORLD.\n\nEnjoy the complete SKG ONE experience across S-MART, KIDS WORLD and INSIGNIA 360° ROOFTOP RESTAURANT.\n\nMake the moment special! ✨"
+    },
+    'ANNIVERSARY_TODAY': {
+        'title': 'Marriage Anniversary — Today', 'trigger': 'On the member’s marriage anniversary',
+        'message': "Happy Anniversary, {{NAME}}! ❤️🥂\n\nWishing you both many more years of happiness, togetherness and beautiful memories.\n\nMake your special day memorable at INSIGNIA 360° ROOFTOP RESTAURANT, find something special at KIDS WORLD, and continue enjoying the benefits of SKG ONE at S-MART.\n\nWishing you a wonderful anniversary! ✨\n\nDon’t forget to enjoy your SKG ONE benefits!"
+    },
+    'NO_TRANSACTION_40': {
+        'title': 'No Transaction — 40 Days', 'trigger': 'Automatically eligible when there has been no transaction for 40 days',
+        'message': "{{NAME}}, we haven’t seen you for a while! 👋\n\nYour SKG ONE Lifetime Membership is still active and your benefits are waiting for you.\n\nIt’s a good time to visit S-MART for your everyday needs, explore something special at KIDS WORLD, or enjoy an evening at INSIGNIA 360° ROOFTOP RESTAURANT.\n\nCome back and enjoy the complete SKG ONE experience. ✨\n\nDon’t forget to enjoy your SKG ONE benefits!"
+    },
+}
+
 DEFAULT_USERS = {
     'SMART': {'username': 'SMART', 'password': 'QWERTY', 'role': 'STORE', 'store': 'SMART'},
     'KIDS': {'username': 'KIDS', 'password': 'ASDFGH', 'role': 'STORE', 'store': 'KIDS'},
@@ -301,8 +352,13 @@ def dashboard(authorization: str | None = Header(None)):
         rows.append({'store': s['name'], 'percentage': s['percentage'], 'sales': e[0]['sales'] if e else 0, 'coins_issued': e[0]['coins'] if e else 0, 'redemptions': r[0]['count'] if r else 0, 'redemption_value': r[0]['value'] if r else 0, 'fresh_coins': r[0]['fresh'] if r else 0})
     return {'members': db.members.count_documents({'active': True}), 'stores': rows, 'role': u.get('role'), 'store': u.get('store')}
 
+@app.get('/reminders/templates')
+def reminder_templates(authorization: str | None = Header(None)):
+    u = auth(authorization); require_admin(u)
+    return [{'key': k, **v} for k, v in WHATSAPP_REMINDER_TEMPLATES.items()]
+
 @app.get('/reminders/inactive')
-def inactive_members(days: int = 90, authorization: str | None = Header(None)):
+def inactive_members(days: int = 40, authorization: str | None = Header(None)):
     u = auth(authorization); require_admin(u); expire_old(); cutoff = iso(today() - timedelta(days=days)); out = []
     for m in db.members.find({'active': True}):
         dates = [r['bill_date'] for r in db.earnings.find({'member_id': m['_id']}, {'bill_date': 1})]
@@ -310,7 +366,7 @@ def inactive_members(days: int = 90, authorization: str | None = Header(None)):
         last = max(dates) if dates else iso(m['created_at'].date()) if isinstance(m.get('created_at'), datetime) else ''
         if last and last >= cutoff: continue
         credited, eligible, _ = balances(m['_id'])
-        text = REMINDER_MESSAGE_TEMPLATE.format(name=m['name'], card_no=m['card_no'], eligible=eligible, credited=credited)
+        text = WHATSAPP_REMINDER_TEMPLATES['NO_TRANSACTION_40']['message'].replace('{{NAME}}', m['name']).replace('{{MEMBER_NO}}', m['card_no']).replace('{{BALANCE}}', str(eligible)).replace('{{COINS}}', str(eligible)).replace('{{AMOUNT}}', '0').replace('{{BUSINESS}}', 'SKG ONE').replace('{{DATE}}', '')
         out.append({'card_no': m['card_no'], 'name': m['name'], 'mobile': m['mobile'], 'last_transaction': last or None, 'eligible_coins': eligible, 'message': text, 'whatsapp_link': whatsapp_link(m['mobile'], text)})
     out.sort(key=lambda r: r['last_transaction'] or '')
     return out
