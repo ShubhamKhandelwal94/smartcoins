@@ -41,7 +41,7 @@ REMINDER_MESSAGE_TEMPLATE = os.getenv('REMINDER_MESSAGE_TEMPLATE',
 WHATSAPP_REMINDER_TEMPLATES = {
     'MEMBERSHIP_CREATED': {
         'title': 'Membership Created', 'trigger': 'Immediately after a membership is created',
-        'message': "Welcome, {{NAME}}! 🎉 Your SKG ONE Lifetime Membership is now active.\n\nYour membership unlocks benefits across S-MART, KIDS WORLD and INSIGNIA 360° ROOFTOP RESTAURANT.\n\nMembership No.: {{MEMBER_NO}}\n\nShop at S-MART, discover something special at KIDS WORLD, or enjoy a memorable experience at INSIGNIA 360° ROOFTOP RESTAURANT.\n\nYour SKG ONE benefits are ready whenever you are. ✨"
+        'message': "Welcome, {{NAME}}! 🎉 Your SKG ONE Lifetime Membership is now active.\n\nYour membership unlocks benefits across S-MART, KIDS WORLD and INSIGNIA 360° ROOFTOP RESTAURANT.\n\nAs a welcome gift, 990 Smart Coins have been added to your account.\n\nMembership No.: {{MEMBER_NO}}\n\nShop at S-MART, discover something special at KIDS WORLD, or enjoy a memorable experience at INSIGNIA 360° ROOFTOP RESTAURANT.\n\nYour SKG ONE benefits are ready whenever you are. ✨"
     },
     'SMART_COINS_EARNED': {
         'title': 'Smart Coins Earned', 'trigger': 'Immediately after a successful bill credit',
@@ -214,11 +214,30 @@ def create_member(x: MemberReq, authorization: str | None = Header(None)):
     if not card: raise HTTPException(400, 'Physical card number is required.')
     if db.members.find_one({'card_no': card}): raise HTTPException(409, 'This card number is already assigned.')
     if db.members.find_one({'mobile': mobile, 'active': True}): raise HTTPException(409, 'This mobile number already has an active membership.')
+    created_at = now()
     try:
-        db.members.insert_one({'card_no': card, 'name': x.name.strip(), 'mobile': mobile, 'email': x.email.strip(), 'address': x.address.strip(), 'dob': x.dob, 'anniversary': x.anniversary, 'active': True, 'created_at': now(), 'created_by': u['_id']})
+        result = db.members.insert_one({'card_no': card, 'name': x.name.strip(), 'mobile': mobile, 'email': x.email.strip(), 'address': x.address.strip(), 'dob': x.dob, 'anniversary': x.anniversary, 'active': True, 'created_at': created_at, 'created_by': u['_id']})
     except DuplicateKeyError: raise HTTPException(409, 'Card number or mobile number is already assigned.')
-    audit('MEMBER_CREATE', card, json.dumps({'card_no': card, 'name': x.name.strip(), 'mobile': mobile}), u['_id'])
-    return {'card_no': card}
+
+    # Welcome bonus: 990 Smart Coins. It follows the standard coin rule:
+    # earned today, usable from the next calendar day, and expires one year
+    # from the membership creation date. Stored in both earnings and coin_lots
+    # so it participates in balance, expiry, redemption allocation and audit.
+    bonus_bill_no = f'WELCOME-{card}'
+    bonus_date = created_at.date()
+    bonus_lot = {
+        'member_id': result.inserted_id, 'source_type': 'WELCOME_BONUS',
+        'bill_no': bonus_bill_no, 'bill_date': iso(bonus_date), 'amount': 0,
+        'coins': 990, 'remaining_coins': 990,
+        'available_on': iso(bonus_date + timedelta(days=1)),
+        'expiry_on': iso(add_year(bonus_date)), 'store': 'SYSTEM',
+        'status': 'ACTIVE', 'created_by': u['_id'], 'created_at': created_at
+    }
+    db.earnings.insert_one({**bonus_lot})
+    db.coin_lots.insert_one(bonus_lot)
+    audit('MEMBER_CREATE', card, json.dumps({'card_no': card, 'name': x.name.strip(), 'mobile': mobile, 'welcome_bonus': 990}), u['_id'])
+    audit('WELCOME_BONUS', card, '990 Smart Coins;available_on=' + bonus_lot['available_on'] + ';expiry=' + bonus_lot['expiry_on'], u['_id'])
+    return {'card_no': card, 'welcome_bonus': 990, 'welcome_bonus_available_on': bonus_lot['available_on'], 'welcome_bonus_expiry_on': bonus_lot['expiry_on']}
 
 @app.put('/members/{card_no}')
 def update_member(card_no: str, x: MemberUpdateReq, authorization: str | None = Header(None)):
@@ -242,7 +261,7 @@ def member_history(card_no: str, authorization: str | None = Header(None)):
     users = {x['_id']: x['username'] for x in db.users.find({}, {'username': 1})}
     earnings = []
     for x in db.earnings.find({'member_id': mid}).sort('created_at', ASCENDING):
-        earnings.append({'type': 'BILL_CREDIT', 'id': x.get('bill_no'), 'status': x.get('status', 'COMPLETED'), 'store': STORES.get(x.get('store'), {}).get('name', x.get('store')), 'bill_no': x.get('bill_no'), 'bill_date': x.get('bill_date'), 'amount': x.get('amount'), 'coins': x.get('coins'), 'available_on': x.get('available_on'), 'expiry_on': x.get('expiry_on'), 'created_at': x.get('created_at').isoformat() if isinstance(x.get('created_at'), datetime) else x.get('created_at'), 'user': users.get(x.get('created_by'), 'unknown')})
+        earnings.append({'type': 'WELCOME_BONUS' if x.get('source_type') == 'WELCOME_BONUS' else 'BILL_CREDIT', 'id': x.get('bill_no'), 'status': x.get('status', 'COMPLETED'), 'store': 'Welcome Bonus' if x.get('source_type') == 'WELCOME_BONUS' else STORES.get(x.get('store'), {}).get('name', x.get('store')), 'bill_no': x.get('bill_no'), 'bill_date': x.get('bill_date'), 'amount': x.get('amount'), 'coins': x.get('coins'), 'available_on': x.get('available_on'), 'expiry_on': x.get('expiry_on'), 'created_at': x.get('created_at').isoformat() if isinstance(x.get('created_at'), datetime) else x.get('created_at'), 'user': users.get(x.get('created_by'), 'unknown')})
     redemptions = []
     for x in db.redemptions.find({'member_id': mid}).sort('created_at', ASCENDING):
         redemptions.append({'type': 'REDEMPTION', 'id': x.get('redemption_id'), 'status': x.get('status'), 'store': STORES.get(x.get('store'), {}).get('name', x.get('store')), 'bill_no': x.get('bill_no'), 'bill_date': x.get('bill_date'), 'amount': x.get('amount'), 'coins': x.get('coins'), 'value': x.get('value'), 'created_at': x.get('created_at').isoformat() if isinstance(x.get('created_at'), datetime) else x.get('created_at'), 'user': users.get(x.get('created_by'), 'unknown')})
