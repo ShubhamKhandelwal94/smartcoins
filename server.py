@@ -1,6 +1,7 @@
 import os, hashlib, secrets, json, subprocess, re
 from pathlib import Path
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Optional
 from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Header, Request
@@ -113,8 +114,9 @@ class UserReq(BaseModel): username: str; password: str; role: str = 'STORE'; sto
 class CorrectionReq(BaseModel): transaction_type: str; transaction_id: str; reason: str
 
 
-def now(): return datetime.utcnow()
-def today(): return date.today()
+IST = ZoneInfo('Asia/Kolkata')
+def now(): return datetime.now(IST).replace(tzinfo=None)
+def today(): return datetime.now(IST).date()
 def iso(d): return d.isoformat()
 def add_year(d):
     try: return d.replace(year=d.year + 1)
@@ -169,6 +171,9 @@ def ensure_indexes():
     db.members.create_index('mobile', unique=True, partialFilterExpression={'active': True})
     db.earnings.create_index('bill_no', unique=True)
     db.redemptions.create_index('bill_no', unique=True)
+    db.coin_lots.create_index([('status', ASCENDING), ('expiry_on', ASCENDING), ('remaining_coins', DESCENDING)])
+    db.members.create_index([('active', ASCENDING), ('dob', ASCENDING)])
+    db.members.create_index([('active', ASCENDING), ('anniversary', ASCENDING)])
     db.sessions.create_index('token', unique=True)
     # Seed the four required accounts if missing. Passwords are stored only as hashes.
     for cfg in DEFAULT_USERS.values():
@@ -237,7 +242,9 @@ def create_member(x: MemberReq, authorization: str | None = Header(None)):
     db.coin_lots.insert_one(bonus_lot)
     audit('MEMBER_CREATE', card, json.dumps({'card_no': card, 'name': x.name.strip(), 'mobile': mobile, 'welcome_bonus': 990}), u['_id'])
     audit('WELCOME_BONUS', card, '990 Smart Coins;available_on=' + bonus_lot['available_on'] + ';expiry=' + bonus_lot['expiry_on'], u['_id'])
-    return {'card_no': card, 'welcome_bonus': 990, 'welcome_bonus_available_on': bonus_lot['available_on'], 'welcome_bonus_expiry_on': bonus_lot['expiry_on']}
+    action = reminder_action('MEMBERSHIP_CREATED', {'name': x.name.strip(), 'card_no': card, 'mobile': mobile})
+    audit('WHATSAPP_READY', card, 'template=MEMBERSHIP_CREATED')
+    return {'card_no': card, 'welcome_bonus': 990, 'welcome_bonus_available_on': bonus_lot['available_on'], 'welcome_bonus_expiry_on': bonus_lot['expiry_on'], 'whatsapp': action}
 
 @app.put('/members/{card_no}')
 def update_member(card_no: str, x: MemberUpdateReq, authorization: str | None = Header(None)):
@@ -276,6 +283,93 @@ def member_history(card_no: str, authorization: str | None = Header(None)):
     c, e, r = balances(mid)
     return {'member': {'card_no': m['card_no'], 'name': m['name'], 'mobile': m['mobile'], 'email': m.get('email', ''), 'address': m.get('address', ''), 'dob': m.get('dob', ''), 'anniversary': m.get('anniversary', ''), 'created_at': m.get('created_at').isoformat() if isinstance(m.get('created_at'), datetime) else m.get('created_at'), 'created_by': users.get(m.get('created_by'), 'unknown')}, 'balance': {'credited': c, 'eligible': e, 'redeemed': r}, 'earnings': earnings, 'redemptions': redemptions, 'audit': audits}
 
+def render_reminder(key, m, **ctx):
+    t = WHATSAPP_REMINDER_TEMPLATES[key]['message']
+    values = {
+        'NAME': m.get('name', ''),
+        'MEMBER_NO': m.get('card_no', ''),
+        'COINS': str(ctx.get('coins', ctx.get('eligible_coins', 0))),
+        'AMOUNT': str(ctx.get('amount', 0)),
+        'BUSINESS': ctx.get('business', 'SKG ONE'),
+        'BALANCE': str(ctx.get('balance', ctx.get('eligible_coins', 0))),
+        'DATE': ctx.get('date', ''),
+    }
+    for k, v in values.items():
+        t = t.replace('{{' + k + '}}', str(v))
+    return t
+
+def reminder_action(key, m, **ctx):
+    text = render_reminder(key, m, **ctx)
+    return {
+        'key': key,
+        'title': WHATSAPP_REMINDER_TEMPLATES[key]['title'],
+        'message': text,
+        'whatsapp_link': whatsapp_link(m.get('mobile', ''), text),
+    }
+
+def member_transaction_dates(mid):
+    dates = []
+    dates += [x.get('bill_date') for x in db.earnings.find({'member_id': mid}, {'bill_date': 1}) if x.get('bill_date')]
+    dates += [x.get('bill_date') for x in db.redemptions.find({'member_id': mid}, {'bill_date': 1}) if x.get('bill_date')]
+    return [x for x in dates if x]
+
+def reminder_qualifiers(key, days=40):
+    """Find members who qualify for a date/inactivity reminder as of today's IST date."""
+    expire_old()
+    target = today()
+    out = []
+    if key in ('SMART_COINS_EXPIRING_30', 'SMART_COINS_EXPIRING_7'):
+        target = today() + timedelta(days=30 if key.endswith('_30') else 7)
+        target_iso = iso(target)
+        pipeline = [
+            {'$match': {'status': 'ACTIVE', 'expiry_on': target_iso, 'available_on': {'$lte': iso(today())}, 'remaining_coins': {'$gt': 0}}},
+            {'$group': {'_id': '$member_id', 'coins': {'$sum': '$remaining_coins'}}},
+        ]
+        for row in db.coin_lots.aggregate(pipeline):
+            m = db.members.find_one({'_id': row['_id'], 'active': True})
+            if not m: continue
+            credited, eligible, _ = balances(m['_id'])
+            out.append({**reminder_action(key, m, coins=int(row['coins']), balance=eligible, date=target_iso),
+                        'card_no': m['card_no'], 'name': m['name'], 'mobile': m['mobile'],
+                        'eligible_coins': eligible, 'qualifying_coins': int(row['coins']), 'qualifying_date': target_iso})
+        return sorted(out, key=lambda x: x['name'].lower())
+
+    if key in ('BIRTHDAY_7', 'BIRTHDAY_2', 'BIRTHDAY_TODAY', 'ANNIVERSARY_7', 'ANNIVERSARY_2', 'ANNIVERSARY_TODAY'):
+        is_ann = key.startswith('ANNIVERSARY')
+        offset = 0 if key.endswith('_TODAY') else (7 if key.endswith('_7') else 2)
+        target = today() + timedelta(days=offset)
+        field = 'anniversary' if is_ann else 'dob'
+        for m in db.members.find({'active': True, field: {'$nin': ['', None]}}):
+            raw = m.get(field, '')
+            try:
+                md = datetime.strptime(raw, '%Y-%m-%d').date()
+            except (ValueError, TypeError):
+                continue
+            if md.month == target.month and md.day == target.day:
+                _, eligible, _ = balances(m['_id'])
+                out.append({**reminder_action(key, m, balance=eligible),
+                            'card_no': m['card_no'], 'name': m['name'], 'mobile': m['mobile'],
+                            'eligible_coins': eligible, 'qualifying_date': target.isoformat(),
+                            'event_date': raw})
+        return sorted(out, key=lambda x: x['name'].lower())
+
+    if key == 'NO_TRANSACTION_40':
+        cutoff = today() - timedelta(days=days)
+        for m in db.members.find({'active': True}):
+            dates = member_transaction_dates(m['_id'])
+            created = m.get('created_at')
+            joined = created.date() if isinstance(created, datetime) else None
+            last = max(dates) if dates else (iso(joined) if joined else '')
+            if not last or last >= iso(cutoff):
+                continue
+            _, eligible, _ = balances(m['_id'])
+            out.append({**reminder_action(key, m, balance=eligible, eligible_coins=eligible),
+                        'card_no': m['card_no'], 'name': m['name'], 'mobile': m['mobile'],
+                        'last_transaction': last, 'eligible_coins': eligible,
+                        'qualifying_date': iso(cutoff)})
+        return sorted(out, key=lambda x: x['last_transaction'] or '')
+    raise HTTPException(400, 'Unsupported reminder template.')
+
 @app.post('/earn')
 def earn(x: EarnReq, authorization: str | None = Header(None)):
     u = auth(authorization); expire_old(); require_store_access(u, x.store)
@@ -289,7 +383,10 @@ def earn(x: EarnReq, authorization: str | None = Header(None)):
         db.earnings.insert_one({**lot}); db.coin_lots.insert_one(lot)
     except DuplicateKeyError: raise HTTPException(409, 'Bill number already used.')
     audit('EARN', x.bill_no, f'{x.store};{coins};bill_date={d}', u['_id'])
-    return {'coins': coins, 'available_on': lot['available_on'], 'expiry_on': lot['expiry_on'], 'bill_date': iso(d)}
+    _, eligible_after, _ = balances(m['_id'])
+    action = reminder_action('SMART_COINS_EARNED', m, coins=coins, amount=f'{x.amount:,.2f}', business=STORES[x.store]['name'], balance=eligible_after)
+    audit('WHATSAPP_READY', x.bill_no, 'template=SMART_COINS_EARNED')
+    return {'coins': coins, 'available_on': lot['available_on'], 'expiry_on': lot['expiry_on'], 'bill_date': iso(d), 'whatsapp': action}
 
 @app.get('/redeem/preview')
 def preview(card_no: str, amount: float, authorization: str | None = Header(None)):
@@ -330,7 +427,10 @@ def redeem(x: RedeemReq, authorization: str | None = Header(None)):
     filename = f'SmartCoins_{rid}.pdf'; c = canvas.Canvas(str(RECEIPTS / filename)); c.setFont('Helvetica-Bold', 18); c.drawString(50, 800, 'SMART COINS'); c.setFont('Helvetica', 11); y = 770
     for k, v in [('Receipt', rid), ('Store', STORES[x.store]['name']), ('Card', x.card_no), ('Member', m['name']), ('Bill', x.bill_no), ('Bill Amount', f'₹{x.amount:,.2f}'), ('Coins Redeemed', f'{coins:,}'), ('Redemption Value', f'₹{value:,.2f}'), ('Cash Paid', f'₹{cash:,.2f}'), ('Fresh Coins', f'{fresh:,}'), ('Date', now().strftime('%Y-%m-%d %H:%M:%S'))]: c.drawString(50, y, f'{k}: {v}'); y -= 25
     c.save()
-    return {'receipt': filename, 'receipt_url': f'/receipts/{filename}', 'coins': coins, 'value': value, 'cash_paid': cash, 'fresh_coins': fresh, 'bill_date': iso(d)}
+    _, eligible_after, _ = balances(m['_id'])
+    action = reminder_action('SMART_COINS_REDEEMED', m, coins=coins, business=STORES[x.store]['name'], balance=eligible_after)
+    audit('WHATSAPP_READY', rid, 'template=SMART_COINS_REDEEMED')
+    return {'receipt': filename, 'receipt_url': f'/receipts/{filename}', 'coins': coins, 'value': value, 'cash_paid': cash, 'fresh_coins': fresh, 'bill_date': iso(d), 'whatsapp': action}
 
 @app.post('/admin/corrections')
 def correction(x: CorrectionReq, authorization: str | None = Header(None)):
@@ -376,19 +476,19 @@ def reminder_templates(authorization: str | None = Header(None)):
     u = auth(authorization); require_admin(u)
     return [{'key': k, **v} for k, v in WHATSAPP_REMINDER_TEMPLATES.items()]
 
+@app.get('/reminders/qualify/{key}')
+def qualify_reminder(key: str, days: int = 40, authorization: str | None = Header(None)):
+    u = auth(authorization); require_admin(u)
+    if key not in WHATSAPP_REMINDER_TEMPLATES or key in ('MEMBERSHIP_CREATED', 'SMART_COINS_EARNED', 'SMART_COINS_REDEEMED'):
+        raise HTTPException(400, 'This reminder is event-triggered and does not have a scheduled qualification query.')
+    rows = reminder_qualifiers(key, days=days)
+    return {'key': key, 'title': WHATSAPP_REMINDER_TEMPLATES[key]['title'], 'count': len(rows), 'members': rows}
+
 @app.get('/reminders/inactive')
 def inactive_members(days: int = 40, authorization: str | None = Header(None)):
-    u = auth(authorization); require_admin(u); expire_old(); cutoff = iso(today() - timedelta(days=days)); out = []
-    for m in db.members.find({'active': True}):
-        dates = [r['bill_date'] for r in db.earnings.find({'member_id': m['_id']}, {'bill_date': 1})]
-        dates += [r['bill_date'] for r in db.redemptions.find({'member_id': m['_id']}, {'bill_date': 1})]
-        last = max(dates) if dates else iso(m['created_at'].date()) if isinstance(m.get('created_at'), datetime) else ''
-        if last and last >= cutoff: continue
-        credited, eligible, _ = balances(m['_id'])
-        text = WHATSAPP_REMINDER_TEMPLATES['NO_TRANSACTION_40']['message'].replace('{{NAME}}', m['name']).replace('{{MEMBER_NO}}', m['card_no']).replace('{{BALANCE}}', str(eligible)).replace('{{COINS}}', str(eligible)).replace('{{AMOUNT}}', '0').replace('{{BUSINESS}}', 'SKG ONE').replace('{{DATE}}', '')
-        out.append({'card_no': m['card_no'], 'name': m['name'], 'mobile': m['mobile'], 'last_transaction': last or None, 'eligible_coins': eligible, 'message': text, 'whatsapp_link': whatsapp_link(m['mobile'], text)})
-    out.sort(key=lambda r: r['last_transaction'] or '')
-    return out
+    u = auth(authorization); require_admin(u)
+    rows = reminder_qualifiers('NO_TRANSACTION_40', days=days)
+    return rows
 
 @app.get('/users')
 def list_users(authorization: str | None = Header(None)):

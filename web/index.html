@@ -248,20 +248,22 @@ tbody tr:hover{background:var(--panel2)}
       <div class="toolbar" style="align-items:end">
         <div><label style="margin:0">Template</label><select id="remTemplate" style="min-width:280px"></select></div>
         <button class="btn secondary" onclick="previewReminderTemplate()">Preview</button>
+        <button class="btn" onclick="findSelectedReminderMembers()">Find qualifying members</button>
       </div>
       <div class="reminder-grid">
         <div class="card reminder-card">
           <div class="section-title">Message Preview</div>
-          <div id="reminderPreview" class="wa-preview">Select a reminder template to preview the WhatsApp message.</div>
+          <div id="reminderPreview" class="wa-preview">Select a reminder template to preview the message.</div>
           <div id="reminderTrigger" class="trigger-note"></div>
         </div>
         <div class="card reminder-card">
-          <div class="section-title">40-Day No Transaction</div>
-          <div class="toolbar" style="margin:0 0 12px"><label style="margin:0">No transaction for</label><input id="remDays" type="number" value="40" min="1" style="width:80px"><button class="btn secondary" onclick="loadReminders()">Find members</button></div>
-          <div class="trigger-note">Trigger: automatically qualifies members after 40 days without a bill credit or redemption. WhatsApp sending requires a connected WhatsApp Business provider; until then, use the pre-filled WhatsApp link.</div>
+          <div class="section-title">Qualification</div>
+          <div id="reminderQualification" class="trigger-note">Choose a template and click “Find qualifying members”.</div>
+          <div class="toolbar" style="margin:14px 0 0"><label style="margin:0">Inactivity days</label><input id="remDays" type="number" value="40" min="1" style="width:80px"><button class="btn secondary" onclick="findSelectedReminderMembers()">Find</button></div>
+          <div class="trigger-note">Date-based reminders are evaluated against today's IST date. Event reminders are generated immediately after the successful event and return a personalised WhatsApp link.</div>
         </div>
       </div>
-      <table><thead><tr><th>Card</th><th>Name</th><th>Last transaction</th><th>Eligible</th><th>WhatsApp</th></tr></thead>
+      <table><thead><tr><th>Card</th><th>Name</th><th>Qualification</th><th>Eligible</th><th>WhatsApp</th></tr></thead>
         <tbody id="rrows"></tbody></table>
     </div>
 
@@ -429,6 +431,7 @@ function searchMembers(){
 }
 function openNewMember(){ document.getElementById('newMemberPanel').classList.add('open'); setTodayDates(); }
 async function createMember(){
+  const waWindow = window.open('about:blank', '_blank');
   try{
     const body = {card_no:nm_card.value.trim(), name:nm_name.value, mobile:nm_mobile.value, email:nm_email.value, address:nm_address.value, dob:nm_dob.value, anniversary:nm_anniversary.value};
     const d = await api('/members', {method:'POST', body: JSON.stringify(body)});
@@ -436,7 +439,8 @@ async function createMember(){
     nm_card.value=nm_name.value=nm_mobile.value=nm_email.value=nm_address.value=nm_dob.value=nm_anniversary.value='';
     document.getElementById('newMemberPanel').classList.remove('open');
     searchMembers();
-  }catch(e){ toast(e.message, true); }
+    if(d.whatsapp?.whatsapp_link){ if(waWindow) waWindow.location.href=d.whatsapp.whatsapp_link; else window.open(d.whatsapp.whatsapp_link, '_blank'); } else if(waWindow) waWindow.close();
+  }catch(e){ if(waWindow) waWindow.close(); toast(e.message, true); }
 }
 
 function setTodayDates(){ const d=new Date().toISOString().slice(0,10); e_date.value=d; r_date.value=d; e_date.disabled=ROLE!=='ADMIN'; r_date.disabled=ROLE!=='ADMIN'; }
@@ -450,13 +454,15 @@ function onlyDigits10(el){ el.value=el.value.replace(/\D/g,'').slice(0,10); }
 nm_mobile.addEventListener('input',()=>onlyDigits10(nm_mobile));
 ed_mobile.addEventListener('input',()=>onlyDigits10(ed_mobile));
 async function doEarn(){
+  const waWindow = window.open('about:blank', '_blank');
   try{
     const body = {card_no:e_card.value, bill_no:e_bill.value, bill_date:e_date.value, amount:parseFloat(e_amount.value), store:e_store.value};
     const d = await api('/earn', {method:'POST', body: JSON.stringify(body)});
     document.getElementById('earnResult').innerHTML = `<div class="result"><div class="big">${d.coins.toLocaleString('en-IN')} coins</div>
-      <span class="chip">available ${d.available_on}</span> <span class="chip">expires ${d.expiry_on}</span></div>`;
+      <span class="chip">available ${d.available_on}</span> <span class="chip">expires ${d.expiry_on}</span><br><a href="${d.whatsapp?.whatsapp_link||'#'}" target="_blank">Open Smart Coins Earned WhatsApp</a></div>`;
     toast('Coins credited'); searchMembers();
-  }catch(e){ toast(e.message, true); }
+    if(d.whatsapp?.whatsapp_link){ if(waWindow) waWindow.location.href=d.whatsapp.whatsapp_link; else window.open(d.whatsapp.whatsapp_link, '_blank'); } else if(waWindow) waWindow.close();
+  }catch(e){ if(waWindow) waWindow.close(); toast(e.message, true); }
 }
 
 async function doPreview(){
@@ -468,15 +474,17 @@ async function doPreview(){
   }catch(e){ toast(e.message, true); }
 }
 async function doRedeem(){
+  const waWindow = window.open('about:blank', '_blank');
   try{
     const body = {card_no:r_card.value, bill_no:r_bill.value, bill_date:r_date.value, amount:parseFloat(r_amount.value), store:r_store.value};
     const d = await api('/redeem', {method:'POST', body: JSON.stringify(body)});
     document.getElementById('redeemResult').innerHTML = `<div class="result">
       <div class="big">${d.coins.toLocaleString('en-IN')} coins redeemed · ₹${d.value.toFixed(2)}</div>
       Cash paid ₹${d.cash_paid.toFixed(2)} · Fresh coins ${d.fresh_coins}<br>
-      <a href="#" onclick="downloadReceipt('${d.receipt}');return false">Download receipt</a></div>`;
+      <a href="#" onclick="downloadReceipt('${d.receipt}');return false">Download receipt</a> · <a href="${d.whatsapp?.whatsapp_link||'#'}" target="_blank">Open Redemption WhatsApp</a></div>`;
     toast('Redemption complete'); searchMembers();
-  }catch(e){ toast(e.message, true); }
+    if(d.whatsapp?.whatsapp_link){ if(waWindow) waWindow.location.href=d.whatsapp.whatsapp_link; else window.open(d.whatsapp.whatsapp_link, '_blank'); } else if(waWindow) waWindow.close();
+  }catch(e){ if(waWindow) waWindow.close(); toast(e.message, true); }
 }
 async function downloadReceipt(name){
   const res = await fetch(API + '/receipts/' + name, {headers:{'Authorization':'Bearer '+TOKEN}});
@@ -495,6 +503,23 @@ async function loadReminderTemplates(){
   }catch(e){ toast(e.message, true); }
 }
 let reminderTemplatesCache = [];
+function isEventReminder(key){ return ['MEMBERSHIP_CREATED','SMART_COINS_EARNED','SMART_COINS_REDEEMED'].includes(key); }
+function reminderQualificationLabel(key, m){
+  if(key.startsWith('SMART_COINS_EXPIRING')) return `${m.qualifying_coins} coins expire on ${m.qualifying_date}`;
+  if(key.startsWith('BIRTHDAY')) return `Birthday: ${m.event_date || m.qualifying_date}`;
+  if(key.startsWith('ANNIVERSARY')) return `Anniversary: ${m.event_date || m.qualifying_date}`;
+  return `No transaction since ${m.last_transaction || 'joining'}`;
+}
+async function loadReminderTemplates(){
+  try{
+    const templates = await api('/reminders/templates');
+    reminderTemplatesCache = templates;
+    const select = document.getElementById('remTemplate');
+    select.innerHTML = templates.map(t => `<option value="${t.key}">${t.title}</option>`).join('');
+    select.onchange = previewReminderTemplate;
+    previewReminderTemplate();
+  }catch(e){ toast(e.message, true); }
+}
 async function previewReminderTemplate(){
   try{
     if(!reminderTemplatesCache.length) reminderTemplatesCache = await api('/reminders/templates');
@@ -503,19 +528,31 @@ async function previewReminderTemplate(){
     if(!t) return;
     document.getElementById('reminderPreview').textContent = t.message;
     document.getElementById('reminderTrigger').textContent = 'Trigger: ' + t.trigger;
+    document.getElementById('reminderQualification').textContent = isEventReminder(key)
+      ? 'Event-triggered: the transaction/member action generates a personalised WhatsApp link immediately.'
+      : 'Date/inactivity-based: click “Find qualifying members” to run the live qualification query.';
   }catch(e){ toast(e.message, true); }
 }
-async function loadReminders(){
+async function findSelectedReminderMembers(){
   try{
-    const d = await api('/reminders/inactive?days=' + (remDays.value||40)); const tb = document.getElementById('rrows'); tb.innerHTML='';
-    d.forEach((m,i)=>{
+    const key = document.getElementById('remTemplate').value;
+    if(isEventReminder(key)){
+      document.getElementById('rrows').innerHTML = '<tr><td colspan="5" style="color:var(--muted)">This template is event-triggered. Perform the membership, bill credit or redemption event to generate its WhatsApp link.</td></tr>';
+      document.getElementById('reminderQualification').textContent = 'No scheduled qualification is needed for this template.';
+      return;
+    }
+    const d = await api('/reminders/qualify/' + encodeURIComponent(key) + '?days=' + (remDays.value||40));
+    const tb = document.getElementById('rrows'); tb.innerHTML='';
+    document.getElementById('reminderQualification').textContent = `${d.count} member${d.count===1?'':'s'} qualify for ${d.title} as of today (IST).`;
+    d.members.forEach((m,i)=>{
       const tr = document.createElement('tr'); tr.style.opacity=0; tr.style.animation = `fadein .3s var(--ease) ${i*0.03}s forwards`;
-      tr.innerHTML = `<td>${m.card_no}</td><td>${m.name}</td><td>${m.last_transaction||'Never'}</td><td>${m.eligible_coins}</td><td><a href="${m.whatsapp_link}" target="_blank">Open WhatsApp</a></td>`;
+      tr.innerHTML = `<td>${m.card_no}</td><td>${m.name}</td><td>${reminderQualificationLabel(key,m)}</td><td>${m.eligible_coins}</td><td><a href="${m.whatsapp_link}" target="_blank">Open WhatsApp</a></td>`;
       tb.appendChild(tr);
     });
-    if (!d.length) tb.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No members qualify for this reminder window</td></tr>';
+    if (!d.members.length) tb.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No members qualify for this reminder today.</td></tr>';
   }catch(e){ toast(e.message, true); }
 }
+async function loadReminders(){ await findSelectedReminderMembers(); }
 
 function openNewUser(){ document.getElementById('newUserPanel').classList.add('open'); }
 function formatDateTime(value){
