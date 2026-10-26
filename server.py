@@ -367,8 +367,11 @@ def member_transaction_dates(mid):
     return [x for x in dates if x]
 
 def reminder_qualifiers(key, days=40):
-    """Find members who qualify for a date/inactivity reminder as of today's IST date."""
-    expire_old()
+    """Find members who qualify for a date/inactivity reminder as of today's IST date.
+
+    Keep this read path read-only: sweeping every expired lot here made reminder searches
+    scale with the entire coin-lot collection. Expiry processing belongs to write/maintenance flows.
+    """
     target = today()
     out = []
     if key in ('SMART_COINS_EXPIRING_30', 'SMART_COINS_EXPIRING_7'):
@@ -625,6 +628,7 @@ def qualify_reminder(key: str, days: int = 40, authorization: str | None = Heade
             'members_missing_whatsapp_number': sum(1 for m in rows if not m.get('whatsapp_link')),
         }
     return result
+
 
 @app.get('/reminders/inactive')
 def inactive_members(days: int = 40, authorization: str | None = Header(None)):

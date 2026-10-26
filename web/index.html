@@ -248,11 +248,12 @@ tbody tr:hover{background:var(--panel2)}
 
     <div class="view" id="view-reminders">
       <div class="topline"><h2>WhatsApp Reminders</h2></div>
-      <p style="color:var(--muted);font-size:13px;max-width:760px">Find members who qualify for a reminder, review their personalised message, and open WhatsApp. The member list loads automatically. WhatsApp requires staff to press Send.</p>
+      <p style="color:var(--muted);font-size:13px;max-width:760px">Find qualifying members and process personalised WhatsApp messages one by one using WhatsApp Web/app. No WhatsApp API is used. Staff must press Send in WhatsApp, then return here for the next member.</p>
       <div class="toolbar" style="align-items:end">
         <div><label style="margin:0">Template</label><select id="remTemplate" style="min-width:280px"></select></div>
         <button class="btn secondary" onclick="previewReminderTemplate()">Preview</button>
         <button class="btn" id="findReminderBtn" onclick="findSelectedReminderMembers()">Find qualifying members</button>
+         <button class="btn" id="bulkSendReminderBtn" onclick="openNextWhatsAppReminder()" disabled>Start WhatsApp batch</button>
       </div>
       <div class="reminder-grid">
         <div class="card reminder-card">
@@ -602,6 +603,11 @@ async function findSelectedReminderMembers(){
     const expiryWindow = key === 'SMART_COINS_EXPIRING_7' ? ' (coins expiring today through the next 7 days)' : key === 'SMART_COINS_EXPIRING_30' ? ' (coins expiring today through the next 30 days)' : '';
     document.getElementById('reminderQualification').textContent = `${d.count} member${d.count===1?'':'s'} qualify for ${d.title} as of ${d.as_of_ist || 'today'} (IST)${expiryWindow}.`;
     if(!Array.isArray(d.members)) throw new Error('The server response did not include a member list. Check the deployment version and try again.');
+    qualifiedReminderMembers = d.members.filter(m => m && m.mobile && m.whatsapp_link);
+    whatsappBatchIndex = 0;
+    const bulkBtn = document.getElementById('bulkSendReminderBtn');
+    bulkBtn.disabled = qualifiedReminderMembers.length === 0;
+    bulkBtn.textContent = qualifiedReminderMembers.length ? `Start WhatsApp batch (${qualifiedReminderMembers.length})` : 'Start WhatsApp batch';
     if(!d.members.length){
       let reason = 'No members qualify for this reminder in the selected window.';
       if(d.diagnostics){
@@ -629,6 +635,8 @@ async function findSelectedReminderMembers(){
       tr.appendChild(action); tb.appendChild(tr);
     });
   }catch(e){
+    qualifiedReminderMembers = []; whatsappBatchIndex = 0;
+    const bulkBtn = document.getElementById('bulkSendReminderBtn'); if(bulkBtn){ bulkBtn.disabled = true; bulkBtn.textContent = 'Start WhatsApp batch'; }
     document.getElementById('rrows').innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Could not load qualifying members.</td></tr>';
     document.getElementById('reminderQualification').textContent = e.message || 'Could not load qualifying members.';
     toast(e.message, true);
@@ -636,6 +644,29 @@ async function findSelectedReminderMembers(){
     if(button) button.disabled = false;
   }
 }
+
+let qualifiedReminderMembers = [];
+let whatsappBatchIndex = 0;
+function openNextWhatsAppReminder(){
+  const btn = document.getElementById('bulkSendReminderBtn');
+  const status = document.getElementById('reminderQualification');
+  if(!qualifiedReminderMembers.length){ toast('Find qualifying members first.', true); return; }
+  if(whatsappBatchIndex >= qualifiedReminderMembers.length){
+    status.textContent = `WhatsApp batch queue completed: ${qualifiedReminderMembers.length} chat(s) opened. Confirm each message was sent in WhatsApp; this page cannot verify delivery.`;
+    btn.disabled = true; btn.textContent = 'Batch completed'; return;
+  }
+  const member = qualifiedReminderMembers[whatsappBatchIndex];
+  if(!member.whatsapp_link){ whatsappBatchIndex++; openNextWhatsAppReminder(); return; }
+  // Open only one chat per click so browsers do not block a burst of popups. Staff must press Send in WhatsApp.
+  window.open(member.whatsapp_link, '_blank', 'noopener,noreferrer');
+  whatsappBatchIndex++;
+  const remaining = qualifiedReminderMembers.length - whatsappBatchIndex;
+  status.textContent = `Opened WhatsApp for ${member.name || member.card_no || 'member'} (${whatsappBatchIndex} of ${qualifiedReminderMembers.length}). Send the message in WhatsApp, return here, then open the next chat. ${remaining} remaining.`;
+  btn.disabled = false;
+  btn.textContent = remaining ? `Open next WhatsApp (${remaining} left)` : 'Finish WhatsApp batch';
+  if(!remaining) btn.textContent = 'Confirm batch complete';
+}
+
 async function loadReminders(){ await findSelectedReminderMembers(); }
 
 function openNewUser(){ document.getElementById('newUserPanel').classList.add('open'); }

@@ -111,3 +111,8 @@ For security, use a fresh MongoDB Atlas password and set `MONGODB_URI` only in y
 The Smart Coins Expiring reminders now qualify active members with active coin lots whose `expiry_on` falls **from today's IST date through the next 7 or 30 calendar days**. They no longer require an exact `expiry_on == today + N` match, which was the main reason members with coins expiring sooner were omitted. Qualification supports both ISO date strings and legacy BSON datetime values. Coin lots must have `status: ACTIVE` and `remaining_coins > 0`; the linked member must be active.
 
 The reminder API now returns expiry qualification diagnostics (`active_coin_lots_in_window`, distinct linked members, active linked members, and qualified members) so an empty result explains whether there are no expiring lots or whether those lots cannot be linked to active member records. Existing WhatsApp links are generated for 10-digit Indian mobile numbers and legacy numbers stored with the `91` country prefix. WhatsApp opens with a personalised draft; staff must review and press Send. Automated background delivery requires a configured WhatsApp Business Platform integration.
+
+
+### WhatsApp reminders without an API
+
+Scheduled reminder lists are qualified by the existing reminder endpoint. The admin UI opens one prefilled WhatsApp chat at a time using the member's existing `wa.me` link. Staff must press **Send** in WhatsApp, then return to SmartCoins and click **Open next WhatsApp**. No WhatsApp Cloud API token, phone-number ID, or approved API template is required. The application cannot confirm that a message was sent or delivered. Browsers may block pop-ups; allow pop-ups for the SmartCoins site if needed.
