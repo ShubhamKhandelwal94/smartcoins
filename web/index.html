@@ -557,7 +557,7 @@ function updateReminderControls(){
   if(btn) btn.textContent = isEventReminder(key) ? 'How to generate link' : 'Find qualifying members';
 }
 function reminderQualificationLabel(key, m){
-  if(key.startsWith('SMART_COINS_EXPIRING')) return `${m.qualifying_coins} coins expire on ${m.qualifying_date}`;
+  if(key.startsWith('SMART_COINS_EXPIRING')) return `${Number(m.qualifying_coins||0).toLocaleString('en-IN')} coins expiring in the reminder window; next expiry ${m.qualifying_date}`;
   if(key.startsWith('BIRTHDAY')) return `Birthday: ${m.event_date || m.qualifying_date}`;
   if(key.startsWith('ANNIVERSARY')) return `Anniversary: ${m.event_date || m.qualifying_date}`;
   return `No transaction since ${m.last_transaction || 'joining'}`;
@@ -599,10 +599,21 @@ async function findSelectedReminderMembers(){
     const days = Math.max(1, Math.min(3650, parseInt(document.getElementById('remDays').value, 10) || 40));
     document.getElementById('remDays').value = days;
     const d = await api('/reminders/qualify/' + encodeURIComponent(key) + '?days=' + days);
-    document.getElementById('reminderQualification').textContent = `${d.count} member${d.count===1?'':'s'} qualify for ${d.title} as of today (IST).`;
+    const expiryWindow = key === 'SMART_COINS_EXPIRING_7' ? ' (coins expiring today through the next 7 days)' : key === 'SMART_COINS_EXPIRING_30' ? ' (coins expiring today through the next 30 days)' : '';
+    document.getElementById('reminderQualification').textContent = `${d.count} member${d.count===1?'':'s'} qualify for ${d.title} as of ${d.as_of_ist || 'today'} (IST)${expiryWindow}.`;
     if(!Array.isArray(d.members)) throw new Error('The server response did not include a member list. Check the deployment version and try again.');
     if(!d.members.length){
-      tb.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No members qualify for this reminder today.</td></tr>';
+      let reason = 'No members qualify for this reminder in the selected window.';
+      if(d.diagnostics){
+        if(d.diagnostics.active_coin_lots_in_window === 0){
+          reason += ' Database check: no ACTIVE coin lots with remaining coins and an expiry date in this window were found.';
+        }else if(d.diagnostics.active_members_with_expiring_lots === 0){
+          reason += ` Database check: ${d.diagnostics.active_coin_lots_in_window} expiring coin lot(s) were found, but their linked members are not active or the member_id does not match a member record.`;
+        }else{
+          reason += ' Expiring lots exist; check the API logs and member status/mobile fields.';
+        }
+      }
+      tb.innerHTML = `<tr><td colspan="5" style="color:var(--muted)">${reason}</td></tr>`;
       return;
     }
     d.members.forEach(m=>{

@@ -54,11 +54,11 @@ WHATSAPP_REMINDER_TEMPLATES = {
     },
     'SMART_COINS_EXPIRING_30': {
         'title': 'Smart Coins Expiring — 30 Days', 'trigger': '30 days before eligible Smart Coins expire',
-        'message': "{{NAME}}, your Smart Coins are expiring soon. ⏳\n\nYou have {{COINS}} Smart Coins worth ₹{{COINS}} expiring on {{DATE}}.\n\nUse them at KIDS WORLD or INSIGNIA 360° ROOFTOP RESTAURANT before they expire.\n\nAnd while you’re there, remember that your SKG ONE membership also brings benefits at S-MART.\n\nDon’t let your benefits go unused! ✨"
+        'message': "{{NAME}}, your Smart Coins are expiring soon. ⏳\n\nYou have {{COINS}} Smart Coins worth ₹{{COINS}} expiring in the next 30 days. Your next expiry date is {{DATE}}.\n\nUse them at KIDS WORLD or INSIGNIA 360° ROOFTOP RESTAURANT before they expire.\n\nAnd while you’re there, remember that your SKG ONE membership also brings benefits at S-MART.\n\nDon’t let your benefits go unused! ✨"
     },
     'SMART_COINS_EXPIRING_7': {
         'title': 'Smart Coins Expiring — 7 Days', 'trigger': '7 days before eligible Smart Coins expire',
-        'message': "Important reminder, {{NAME}}! ⏰ Your {{COINS}} Smart Coins worth ₹{{COINS}} will expire on {{DATE}}.\n\nUse them before they expire at KIDS WORLD or INSIGNIA 360° ROOFTOP RESTAURANT.\n\nKeep enjoying the complete SKG ONE experience across S-MART, KIDS WORLD and INSIGNIA 360° ROOFTOP RESTAURANT.\n\nMake your Smart Coins count! 🪙"
+        'message': "Important reminder, {{NAME}}! ⏰ You have {{COINS}} Smart Coins worth ₹{{COINS}} expiring in the next 7 days. Your next expiry date is {{DATE}}.\n\nUse them before they expire at KIDS WORLD or INSIGNIA 360° ROOFTOP RESTAURANT.\n\nKeep enjoying the complete SKG ONE experience across S-MART, KIDS WORLD and INSIGNIA 360° ROOFTOP RESTAURANT.\n\nMake your Smart Coins count! 🪙"
     },
     'BIRTHDAY_7': {
         'title': 'Birthday — 7 Days Before', 'trigger': '7 days before the member’s birthday',
@@ -97,10 +97,22 @@ DEFAULT_USERS = {
     'ADMIN': {'username': 'GOVIND', 'password': 'Govind@123', 'role': 'ADMIN', 'store': None},
 }
 
-def whatsapp_link(mobile: str, text: str) -> str:
+def normalized_whatsapp_number(mobile: str) -> str:
     digits = re.sub(r'\D', '', mobile or '')
-    if digits.startswith('0'): digits = digits.lstrip('0')
-    if not digits.startswith(WHATSAPP_COUNTRY_CODE) and len(digits) <= 10: digits = WHATSAPP_COUNTRY_CODE + digits
+    if digits.startswith('0'):
+        digits = digits.lstrip('0')
+    if len(digits) == 10:
+        digits = WHATSAPP_COUNTRY_CODE + digits
+    # Accept legacy records stored as 91XXXXXXXXXX / +91 XXXXXXXXXX as well
+    # as the 10-digit Indian mobile format used by the member form.
+    if len(digits) == 12 and digits.startswith(WHATSAPP_COUNTRY_CODE):
+        return digits
+    return digits if len(digits) >= 10 and len(digits) <= 15 else ''
+
+def whatsapp_link(mobile: str, text: str) -> str:
+    digits = normalized_whatsapp_number(mobile)
+    if not digits:
+        return ''
     return f'https://wa.me/{digits}?text={quote(text)}'
 
 class LoginReq(BaseModel): username: str; password: str
@@ -360,20 +372,54 @@ def reminder_qualifiers(key, days=40):
     target = today()
     out = []
     if key in ('SMART_COINS_EXPIRING_30', 'SMART_COINS_EXPIRING_7'):
-        target = today() + timedelta(days=30 if key.endswith('_30') else 7)
+        # These are rolling-window reminders, not exact-day matches. The old query
+        # matched expiry_on == today + N, so members with coins expiring in 1..N-1
+        # days were incorrectly reported as unqualified.
+        window_days = 30 if key.endswith('_30') else 7
+        today_iso = iso(today())
+        target = today() + timedelta(days=window_days)
         target_iso = iso(target)
+        # Support both the ISO date strings written by this application and legacy
+        # BSON datetime values that may exist in imported coin lots.
+        start_dt = datetime.combine(today(), datetime.min.time())
+        end_dt = datetime.combine(target, datetime.max.time())
+        expiry_match = {'$or': [
+            {'expiry_on': {'$gte': today_iso, '$lte': target_iso}},
+            {'expiry_on': {'$gte': start_dt, '$lte': end_dt}},
+        ]}
+        match = {'status': 'ACTIVE', 'remaining_coins': {'$gt': 0}, **expiry_match}
         pipeline = [
-            {'$match': {'status': 'ACTIVE', 'expiry_on': target_iso, 'available_on': {'$lte': iso(today())}, 'remaining_coins': {'$gt': 0}}},
-            {'$group': {'_id': '$member_id', 'coins': {'$sum': '$remaining_coins'}}},
+            {'$match': match},
+            {'$group': {
+                '_id': '$member_id',
+                'coins': {'$sum': '$remaining_coins'},
+                'next_expiry': {'$min': '$expiry_on'},
+                'lot_count': {'$sum': 1},
+            }},
         ]
-        for row in db.coin_lots.aggregate(pipeline):
-            m = db.members.find_one({'_id': row['_id'], 'active': True})
-            if not m: continue
-            credited, eligible, _ = balances(m['_id'])
-            out.append({**reminder_action(key, m, coins=int(row['coins']), balance=eligible, date=target_iso),
-                        'card_no': m['card_no'], 'name': m['name'], 'mobile': m['mobile'],
-                        'eligible_coins': eligible, 'qualifying_coins': int(row['coins']), 'qualifying_date': target_iso})
-        return sorted(out, key=lambda x: x['name'].lower())
+        rows = list(db.coin_lots.aggregate(pipeline, allowDiskUse=True))
+        member_ids = [row['_id'] for row in rows if row.get('_id') is not None]
+        members_by_id = {m['_id']: m for m in db.members.find(
+            {'_id': {'$in': member_ids}, 'active': True},
+            {'card_no': 1, 'name': 1, 'mobile': 1, 'active': 1})} if member_ids else {}
+        for row in rows:
+            m = members_by_id.get(row['_id'])
+            if not m:
+                continue
+            next_expiry = row.get('next_expiry')
+            if isinstance(next_expiry, datetime):
+                next_expiry = next_expiry.date().isoformat()
+            else:
+                next_expiry = str(next_expiry or target_iso)[:10]
+            _, eligible, _ = balances(m['_id'])
+            coins = int(row.get('coins', 0))
+            out.append({**reminder_action(key, m, coins=coins, balance=eligible, date=next_expiry),
+                        'card_no': m.get('card_no', ''), 'name': m.get('name', ''), 'mobile': m.get('mobile', ''),
+                        'eligible_coins': eligible, 'qualifying_coins': coins, 'qualifying_date': next_expiry,
+                        'expiring_lots': int(row.get('lot_count', 0)),
+                        'has_valid_mobile': bool(normalized_whatsapp_number(m.get('mobile', ''))),
+            })
+        return sorted(out, key=lambda x: (x['qualifying_date'], x['name'].lower()))
 
     if key in ('BIRTHDAY_7', 'BIRTHDAY_2', 'BIRTHDAY_TODAY', 'ANNIVERSARY_7', 'ANNIVERSARY_2', 'ANNIVERSARY_TODAY'):
         is_ann = key.startswith('ANNIVERSARY')
@@ -556,7 +602,29 @@ def qualify_reminder(key: str, days: int = 40, authorization: str | None = Heade
     if key not in WHATSAPP_REMINDER_TEMPLATES or key in ('MEMBERSHIP_CREATED', 'SMART_COINS_EARNED', 'SMART_COINS_REDEEMED'):
         raise HTTPException(400, 'This reminder is event-triggered and does not have a scheduled qualification query.')
     rows = reminder_qualifiers(key, days=days)
-    return {'key': key, 'title': WHATSAPP_REMINDER_TEMPLATES[key]['title'], 'count': len(rows), 'members': rows}
+    result = {'key': key, 'title': WHATSAPP_REMINDER_TEMPLATES[key]['title'], 'count': len(rows), 'members': rows, 'as_of_ist': iso(today())}
+    if key in ('SMART_COINS_EXPIRING_30', 'SMART_COINS_EXPIRING_7'):
+        window_days = 30 if key.endswith('_30') else 7
+        start = today(); end = start + timedelta(days=window_days)
+        start_dt = datetime.combine(start, datetime.min.time())
+        end_dt = datetime.combine(end, datetime.max.time())
+        lot_query = {'status': 'ACTIVE', 'remaining_coins': {'$gt': 0}, '$or': [
+            {'expiry_on': {'$gte': iso(start), '$lte': iso(end)}},
+            {'expiry_on': {'$gte': start_dt, '$lte': end_dt}},
+        ]}
+        matching_lots = db.coin_lots.count_documents(lot_query)
+        matching_member_ids = db.coin_lots.distinct('member_id', lot_query)
+        active_matching_members = db.members.count_documents({'_id': {'$in': matching_member_ids}, 'active': True}) if matching_member_ids else 0
+        result['qualification_window_days'] = window_days
+        result['diagnostics'] = {
+            'active_members': db.members.count_documents({'active': True}),
+            'active_coin_lots_in_window': matching_lots,
+            'distinct_members_with_expiring_lots': len(matching_member_ids),
+            'active_members_with_expiring_lots': active_matching_members,
+            'qualified_members': len(rows),
+            'members_missing_whatsapp_number': sum(1 for m in rows if not m.get('whatsapp_link')),
+        }
+    return result
 
 @app.get('/reminders/inactive')
 def inactive_members(days: int = 40, authorization: str | None = Header(None)):

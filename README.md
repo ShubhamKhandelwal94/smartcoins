@@ -105,3 +105,9 @@ If a MongoDB connection string with a real password was previously committed or 
 - `expiredPoints` is based on records in `expiry_log`; historic lots that expired before expiry logging existed will not be included until reconciled.
 
 For security, use a fresh MongoDB Atlas password and set `MONGODB_URI` only in your local environment or Render environment settings. Never commit a real connection string.
+
+## WhatsApp reminder qualification fix
+
+The Smart Coins Expiring reminders now qualify active members with active coin lots whose `expiry_on` falls **from today's IST date through the next 7 or 30 calendar days**. They no longer require an exact `expiry_on == today + N` match, which was the main reason members with coins expiring sooner were omitted. Qualification supports both ISO date strings and legacy BSON datetime values. Coin lots must have `status: ACTIVE` and `remaining_coins > 0`; the linked member must be active.
+
+The reminder API now returns expiry qualification diagnostics (`active_coin_lots_in_window`, distinct linked members, active linked members, and qualified members) so an empty result explains whether there are no expiring lots or whether those lots cannot be linked to active member records. Existing WhatsApp links are generated for 10-digit Indian mobile numbers and legacy numbers stored with the `91` country prefix. WhatsApp opens with a personalised draft; staff must review and press Send. Automated background delivery requires a configured WhatsApp Business Platform integration.
