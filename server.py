@@ -199,6 +199,8 @@ def ensure_indexes():
     db.members.create_index([('active', ASCENDING), ('card_no', ASCENDING)])
     db.members.create_index([('active', ASCENDING), ('dob', ASCENDING)])
     db.members.create_index([('active', ASCENDING), ('anniversary', ASCENDING)])
+    db.members.create_index([('created_at', ASCENDING)])
+    db.redemptions.create_index([('status', ASCENDING), ('created_at', ASCENDING)])
     db.sessions.create_index('token', unique=True)
     # Seed the four required accounts if missing. Passwords are stored only as hashes.
     for cfg in DEFAULT_USERS.values():
@@ -628,6 +630,37 @@ def dashboard(authorization: str | None = Header(None)):
     cm = coin_rows[0] if coin_rows else {}; rd = redeemed[0] if redeemed else {}; ex = expired[0] if expired else {}
     return {'members': db.members.count_documents({'active': True}), 'stores': rows, 'role': u.get('role'), 'store': u.get('store'),
         'metrics': {'totalCoinsIssued': int(cm.get('totalIssued', 0)), 'eligiblePoints': int(cm.get('eligiblePoints', 0)), 'pendingPoints': int(cm.get('pendingPoints', 0)), 'redeemedPoints': int(rd.get('points', 0)), 'redemptionValue': rd.get('value', 0), 'redemptionCount': int(rd.get('count', 0)), 'expiredPoints': int(ex.get('points', 0)), 'expiredLots': int(ex.get('lots', 0)), 'expiringNext30Days': int((expiring[0] if expiring else {}).get('points', 0))}}
+
+@app.get('/dashboard/trends')
+def dashboard_trends(start_date: str, end_date: str, authorization: str | None = Header(None)):
+    """Daily card issuance and completed redemption counts for the selected inclusive date range."""
+    u = auth(authorization); require_admin(u)
+    try:
+        start = date.fromisoformat(start_date); end = date.fromisoformat(end_date)
+    except ValueError:
+        raise HTTPException(400, 'Dates must use YYYY-MM-DD format.')
+    if end < start: raise HTTPException(400, 'End date must be on or after start date.')
+    if (end - start).days > 366: raise HTTPException(400, 'Please select a date range of 366 days or less.')
+    start_dt = datetime.combine(start, datetime.min.time())
+    end_dt = datetime.combine(end + timedelta(days=1), datetime.min.time())
+    issued_rows = db.members.aggregate([
+        {'$match': {'created_at': {'$gte': start_dt, '$lt': end_dt}}},
+        {'$group': {'_id': {'$dateToString': {'format': '%Y-%m-%d', 'date': '$created_at'}}, 'count': {'$sum': 1}}},
+    ])
+    redeemed_rows = db.redemptions.aggregate([
+        {'$match': {'status': 'COMPLETED', 'created_at': {'$gte': start_dt, '$lt': end_dt}}},
+        {'$group': {'_id': {'$dateToString': {'format': '%Y-%m-%d', 'date': '$created_at'}}, 'count': {'$sum': 1}}},
+    ])
+    issued = {r['_id']: int(r['count']) for r in issued_rows}
+    redeemed = {r['_id']: int(r['count']) for r in redeemed_rows}
+    days = []
+    current = start
+    while current <= end:
+        key = current.isoformat()
+        days.append({'date': key, 'cards_issued': issued.get(key, 0), 'redemptions': redeemed.get(key, 0)})
+        current += timedelta(days=1)
+    return {'start_date': start.isoformat(), 'end_date': end.isoformat(), 'days': days}
+
 
 @app.get('/reminders/templates')
 def reminder_templates(authorization: str | None = Header(None)):

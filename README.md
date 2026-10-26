@@ -124,3 +124,9 @@ Scheduled reminder lists are qualified by the existing reminder endpoint. The ad
 - `GET /reminders/qualify/{key}` includes `duration_ms` to help measure backend qualification time. The frontend shows the server-side duration after a successful search.
 - The Reminders screen shows a spinner in the Find Qualifying Members button and results area while a query is running, disables repeated clicks, and shows a loading state while reminder templates are fetched.
 - These changes have been syntax-checked locally, but real performance depends on the deployed Render instance, MongoDB size, indexes and network latency. Compare the API's `duration_ms` with browser Network timing after deployment.
+
+## Member dialogs and dashboard trends
+
+- New-member and edit/history panels open as viewport-bounded dialogs, with their own scroll area and close controls, so staff do not need to scroll to the bottom of the full Members page to reach form actions.
+- Admin Dashboard includes a daily line chart for cards issued and completed redemptions. Select an inclusive start/end date range (up to 366 days) and apply it to refresh the chart.
+- Trend data is served by `GET /dashboard/trends?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD`; it uses member `created_at` for card issuance and completed redemption `created_at` for redemptions. Date range queries are supported by indexes created at startup.

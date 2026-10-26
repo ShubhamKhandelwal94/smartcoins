@@ -111,9 +111,14 @@ tbody tr:hover{background:var(--panel2)}
 .panel{padding:24px;max-width:620px}
 .reveal{max-height:0;overflow:hidden;transition:max-height .4s var(--ease)}
 .reveal.open{max-height:800px}
+/* Member create/edit panels behave like dialogs so actions stay reachable without page-length scrolling. */
+#newMemberPanel.reveal.open,#memberDetailPanel.reveal.open{position:fixed;z-index:40;left:50%;top:4vh;transform:translateX(-50%);width:min(960px,calc(100vw - 32px));max-height:92vh;overflow-y:auto;overscroll-behavior:contain;box-shadow:0 0 0 100vmax rgba(0,0,0,.72),0 20px 70px rgba(0,0,0,.5);background:var(--panel);border-radius:14px;padding:20px}
+#newMemberPanel .panel{max-width:none;padding:8px;border:0}
+#newMemberPanel .topline,#memberDetailPanel .topline{position:sticky;top:-20px;background:var(--panel);z-index:2;padding:8px 0 12px;margin-bottom:14px}
+.trend-panel{padding:18px;margin-bottom:24px}.trend-filters{display:flex;gap:12px;align-items:end;flex-wrap:wrap}.trend-filters>div{min-width:150px}.trend-chart{width:100%;min-height:260px;display:block}.trend-legend{display:flex;gap:18px;flex-wrap:wrap;color:var(--muted);font-size:13px;margin:8px 0}.legend-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}.trend-status{color:var(--muted);font-size:12px;margin-top:8px}
 /* Member details contains several wide history tables; keep the detail panel usable without clipping. */
 #memberDetailPanel{max-width:none;width:100%;}
-#memberDetailPanel.reveal.open{max-height:none;overflow:visible;}
+#memberDetailPanel.reveal.open{max-height:92vh;overflow-y:auto;overscroll-behavior:contain;}
 #memberHistory{width:100%;overflow-x:auto;}
 #memberHistory table{min-width:900px;}
 #memberHistory h3{margin:24px 0 10px;}
@@ -175,6 +180,7 @@ tbody tr:hover{background:var(--panel2)}
       <div class="topline"><h2>Dashboard</h2><button class="btn secondary" onclick="loadDashboard()">Refresh</button></div>
       <div class="hero"><div class="num" id="heroMembers">0</div><div class="label">active members</div></div>
       <div class="metrics-grid" id="dashboardMetrics"></div>
+      <div class="card trend-panel"><div class="topline" style="margin-bottom:12px"><h3 style="margin:0">Cards issued vs redemptions</h3></div><div class="trend-filters"><div><label>Start date</label><input type="date" id="trendStart"></div><div><label>End date</label><input type="date" id="trendEnd"></div><button class="btn" id="trendApplyBtn" onclick="loadDashboardTrends()">Apply dates</button></div><div class="trend-legend"><span><i class="legend-dot" style="background:var(--gold)"></i>Cards issued</span><span><i class="legend-dot" style="background:var(--teal)"></i>Redemptions</span></div><div id="trendChart"><div class="trend-status">Choose a date range to load activity.</div></div><div class="trend-status" id="trendStatus"></div></div>
       <div class="stores" id="stores"></div>
     </div>
 
@@ -197,7 +203,7 @@ tbody tr:hover{background:var(--panel2)}
       </div>
       <div class="panel reveal" id="newMemberPanel" style="margin-top:20px;padding:0">
         <div class="panel card">
-          <h3 style="margin-top:0">New member</h3>
+          <div class="topline"><h3 style="margin-top:0">New member</h3><button type="button" class="btn secondary" onclick="closeNewMember()">Close</button></div>
           <div class="formgrid">
             <div><label>Physical card number</label><input id="nm_card" placeholder="Enter the card in your hand"></div>
             <div><label>Name</label><input id="nm_name"></div>
@@ -403,8 +409,10 @@ function countUp(el, to){
 }
 
 async function loadDashboard(){
+  initTrendDates();
   try{
     const d = await api('/dashboard');
+    loadDashboardTrends();
     countUp(document.getElementById('heroMembers'), d.members || 0);
     const m = d.metrics || {};
     const fmt = n => Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:0});
@@ -427,6 +435,34 @@ async function loadDashboard(){
       </div>`);
     });
   }catch(e){ toast(e.message, true); }
+}
+
+function initTrendDates(){
+  const end=new Date(); const start=new Date(); start.setDate(start.getDate()-29);
+  const fmt=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const a=document.getElementById('trendStart'),b=document.getElementById('trendEnd');
+  if(a&&!a.value)a.value=fmt(start); if(b&&!b.value)b.value=fmt(end);
+}
+function renderTrendChart(days){
+  const root=document.getElementById('trendChart'); if(!days.length){root.innerHTML='<div class="trend-status">No activity for this date range.</div>';return;}
+  const W=900,H=270,L=44,R=18,T=18,B=42,iw=W-L-R,ih=H-T-B;
+  const max=Math.max(1,...days.map(d=>Math.max(d.cards_issued,d.redemptions))); const n=days.length;
+  const x=i=>L+(n===1?iw/2:i*iw/(n-1)); const y=v=>T+ih-(v/max)*ih;
+  const path=key=>days.map((d,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(d[key]).toFixed(1)).join(' ');
+  const grid=[0,.25,.5,.75,1].map(f=>{const v=Math.round(max*f),yy=y(v);return `<line x1="${L}" y1="${yy}" x2="${W-R}" y2="${yy}" stroke="var(--line)"/><text x="${L-9}" y="${yy+4}" fill="var(--muted)" text-anchor="end" font-size="11">${v}</text>`}).join('');
+  const labelStep=Math.max(1,Math.ceil(n/8)); const labels=days.map((d,i)=>i%labelStep===0||i===n-1?`<text x="${x(i)}" y="${H-13}" fill="var(--muted)" text-anchor="middle" font-size="10">${d.date.slice(5)}</text>`:'').join('');
+  const dots=(key,color)=>days.map((d,i)=>`<circle cx="${x(i)}" cy="${y(d[key])}" r="${n>70?1.8:3}" fill="${color}"><title>${d.date}: ${d[key]}</title></circle>`).join('');
+  root.innerHTML=`<svg class="trend-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily cards issued and redemption counts">${grid}${labels}<path d="${path('cards_issued')}" fill="none" stroke="var(--gold)" stroke-width="2.5"/>${dots('cards_issued','var(--gold)')}<path d="${path('redemptions')}" fill="none" stroke="var(--teal)" stroke-width="2.5"/>${dots('redemptions','var(--teal)')}</svg>`;
+}
+async function loadDashboardTrends(){
+  const btn=document.getElementById('trendApplyBtn'),root=document.getElementById('trendChart'),status=document.getElementById('trendStatus');
+  const start=document.getElementById('trendStart').value,end=document.getElementById('trendEnd').value;
+  if(!start||!end||end<start){toast('Choose a valid start and end date.',true);return;}
+  if((new Date(end)-new Date(start))/86400000>366){toast('Choose a date range of 366 days or less.',true);return;}
+  const old=btn.innerHTML;btn.disabled=true;btn.innerHTML='<span class="spin" aria-hidden="true"></span> Loading…';root.innerHTML='<div class="trend-status"><span class="spin" aria-hidden="true"></span> Loading chart…</div>';status.textContent='';
+  try{const d=await api('/dashboard/trends?start_date='+encodeURIComponent(start)+'&end_date='+encodeURIComponent(end));renderTrendChart(d.days||[]);status.textContent=`${(d.days||[]).length} days · ${start} to ${end}`;}
+  catch(e){root.innerHTML='<div class="trend-status">Could not load chart data.</div>';toast(e.message,true);}
+  finally{btn.disabled=false;btn.textContent=old;}
 }
 
 let searchTimer, memberPage=1, memberTotalPages=1, memberRequestId=0;
@@ -458,7 +494,8 @@ function searchMembers(immediate=false){
 }
 function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
-function openNewMember(){ document.getElementById('newMemberPanel').classList.add('open'); setTodayDates(); }
+function openNewMember(){ document.getElementById('newMemberPanel').classList.add('open'); setTodayDates(); document.getElementById('nm_card').focus(); }
+function closeNewMember(){ document.getElementById('newMemberPanel').classList.remove('open'); }
 async function createMember(){
   const waWindow = window.open('about:blank', '_blank');
   try{
@@ -700,7 +737,7 @@ async function openMemberDetails(card){
     h+='<h3>Redemptions</h3><table><thead><tr><th>Date</th><th>Outlet</th><th>Bill</th><th>Amount</th><th>Coins</th><th>Value</th><th>User</th><th>Status</th><th></th></tr></thead><tbody>';
     d.redemptions.forEach(x=>{h+=`<tr><td>${x.bill_date||''}</td><td>${x.store||''}</td><td>${x.bill_no||''}</td><td>₹${(x.amount||0).toLocaleString('en-IN')}</td><td>${x.coins||0}</td><td>₹${(x.value||0).toLocaleString('en-IN')}</td><td>${x.user||''}</td><td>${x.status||''}</td><td>${x.status!=='REVERSED'?`<a href="#" onclick="reverseTxn('REDEEM','${x.id}');return false">Reverse</a>`:''}</td></tr>`}); h+='</tbody></table>';
     h+='<h3>Audit / corrections</h3><table><thead><tr><th>Date/time</th><th>Event</th><th>Reference</th><th>User</th><th>Details</th></tr></thead><tbody>'; d.audit.forEach(x=>h+=`<tr><td>${formatDateTime(x.created_at)}</td><td>${x.event||''}</td><td>${x.ref||''}</td><td>${x.user||''}</td><td>${x.details||''}</td></tr>`); h+='</tbody></table>';
-    document.getElementById('memberHistory').innerHTML=h; document.getElementById('memberDetailPanel').classList.add('open');
+    document.getElementById('memberHistory').innerHTML=h; document.getElementById('memberDetailPanel').classList.add('open'); document.getElementById('ed_name').focus();
   }catch(e){toast(e.message,true)}
 }
 function closeMemberDetails(){document.getElementById('memberDetailPanel').classList.remove('open');}
