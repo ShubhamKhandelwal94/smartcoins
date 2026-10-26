@@ -177,11 +177,11 @@ tbody tr:hover{background:var(--panel2)}
 
   <div class="main">
     <div class="view" id="view-dashboard">
-      <div class="topline"><h2>Dashboard</h2><button class="btn secondary" onclick="loadDashboard()">Refresh</button></div>
+      <div class="topline"><h2>Dashboard</h2><button class="btn secondary" id="dashboardRefreshBtn" onclick="loadDashboard()">Refresh</button></div>
       <div class="hero"><div class="num" id="heroMembers">0</div><div class="label">active members</div></div>
       <div class="metrics-grid" id="dashboardMetrics"></div>
-      <div class="card trend-panel"><div class="topline" style="margin-bottom:12px"><h3 style="margin:0">Cards issued vs redemptions</h3></div><div class="trend-filters"><div><label>Start date</label><input type="date" id="trendStart"></div><div><label>End date</label><input type="date" id="trendEnd"></div><button class="btn" id="trendApplyBtn" onclick="loadDashboardTrends()">Apply dates</button></div><div class="trend-legend"><span><i class="legend-dot" style="background:var(--gold)"></i>Cards issued</span><span><i class="legend-dot" style="background:var(--teal)"></i>Redemptions</span></div><div id="trendChart"><div class="trend-status">Choose a date range to load activity.</div></div><div class="trend-status" id="trendStatus"></div></div>
       <div class="stores" id="stores"></div>
+      <div class="card trend-panel"><div class="topline" style="margin-bottom:12px"><h3 style="margin:0">Cards issued vs redemptions</h3></div><div class="trend-filters"><div><label>Start date</label><input type="date" id="trendStart"></div><div><label>End date</label><input type="date" id="trendEnd"></div><button class="btn" id="trendApplyBtn" onclick="loadDashboardTrends()">Apply dates</button></div><div class="trend-legend"><span title="Count of memberships created on each date"><i class="legend-dot" style="background:var(--gold)"></i>Cards issued</span><span title="Count of completed redemptions on each date"><i class="legend-dot" style="background:var(--teal)"></i>Redemptions</span><span title="Hover over or focus a point to see both daily counts" style="font-size:12px">ⓘ Hover over points for daily counts</span></div><div id="trendChart"><div class="trend-status">Choose a date range to load activity.</div></div><div class="trend-status" id="trendStatus"></div></div>
     </div>
 
     <div class="view" id="view-members">
@@ -410,6 +410,9 @@ function countUp(el, to){
 
 async function loadDashboard(){
   initTrendDates();
+  const refreshBtn=document.getElementById('dashboardRefreshBtn');
+  const previousLabel=refreshBtn?refreshBtn.innerHTML:'';
+  if(refreshBtn){refreshBtn.disabled=true;refreshBtn.innerHTML='<span class="spin" aria-hidden="true"></span> Loading…';}
   try{
     const d = await api('/dashboard');
     loadDashboardTrends();
@@ -435,6 +438,7 @@ async function loadDashboard(){
       </div>`);
     });
   }catch(e){ toast(e.message, true); }
+  finally{if(refreshBtn){refreshBtn.disabled=false;refreshBtn.innerHTML=previousLabel;}}
 }
 
 function initTrendDates(){
@@ -451,8 +455,8 @@ function renderTrendChart(days){
   const path=key=>days.map((d,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(d[key]).toFixed(1)).join(' ');
   const grid=[0,.25,.5,.75,1].map(f=>{const v=Math.round(max*f),yy=y(v);return `<line x1="${L}" y1="${yy}" x2="${W-R}" y2="${yy}" stroke="var(--line)"/><text x="${L-9}" y="${yy+4}" fill="var(--muted)" text-anchor="end" font-size="11">${v}</text>`}).join('');
   const labelStep=Math.max(1,Math.ceil(n/8)); const labels=days.map((d,i)=>i%labelStep===0||i===n-1?`<text x="${x(i)}" y="${H-13}" fill="var(--muted)" text-anchor="middle" font-size="10">${d.date.slice(5)}</text>`:'').join('');
-  const dots=(key,color)=>days.map((d,i)=>`<circle cx="${x(i)}" cy="${y(d[key])}" r="${n>70?1.8:3}" fill="${color}"><title>${d.date}: ${d[key]}</title></circle>`).join('');
-  root.innerHTML=`<svg class="trend-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily cards issued and redemption counts">${grid}${labels}<path d="${path('cards_issued')}" fill="none" stroke="var(--gold)" stroke-width="2.5"/>${dots('cards_issued','var(--gold)')}<path d="${path('redemptions')}" fill="none" stroke="var(--teal)" stroke-width="2.5"/>${dots('redemptions','var(--teal)')}</svg>`;
+  const dots=(key,color,label)=>days.map((d,i)=>`<circle cx="${x(i)}" cy="${y(d[key])}" r="${n>70?2.2:4}" fill="${color}" tabindex="0" aria-label="${d.date}, ${label}: ${d[key]}; cards issued: ${d.cards_issued}; redemptions: ${d.redemptions}"><title>${d.date} · Cards issued: ${d.cards_issued} · Redemptions: ${d.redemptions}</title></circle>`).join('');
+  root.innerHTML=`<svg class="trend-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily cards issued and redemption counts">${grid}${labels}<path d="${path('cards_issued')}" fill="none" stroke="var(--gold)" stroke-width="2.5"/>${dots('cards_issued','var(--gold)','Cards issued')}<path d="${path('redemptions')}" fill="none" stroke="var(--teal)" stroke-width="2.5"/>${dots('redemptions','var(--teal)','Redemptions')}</svg>`;
 }
 async function loadDashboardTrends(){
   const btn=document.getElementById('trendApplyBtn'),root=document.getElementById('trendChart'),status=document.getElementById('trendStatus');

@@ -130,3 +130,12 @@ Scheduled reminder lists are qualified by the existing reminder endpoint. The ad
 - New-member and edit/history panels open as viewport-bounded dialogs, with their own scroll area and close controls, so staff do not need to scroll to the bottom of the full Members page to reach form actions.
 - Admin Dashboard includes a daily line chart for cards issued and completed redemptions. Select an inclusive start/end date range (up to 366 days) and apply it to refresh the chart.
 - Trend data is served by `GET /dashboard/trends?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD`; it uses member `created_at` for card issuance and completed redemption `created_at` for redemptions. Date range queries are supported by indexes created at startup.
+
+
+## Reminder and dashboard performance update
+
+- Fixed the missing `time` import used by reminder qualification timing; without it, `/reminders/qualify/NO_TRANSACTION_40?days=10` could return HTTP 500 before the qualification query ran.
+- The generic exception handler logs the exception and request path to server logs while keeping the client error message generic. Check Render logs if another 500 occurs.
+- Dashboard reads no longer run the global `expire_old()` mutation/scan on every refresh. Expiry maintenance should be triggered from an appropriate maintenance/write flow rather than the dashboard read endpoint.
+- Added compound indexes aligned with dashboard store summaries, member transaction date lookups, coin eligibility filters, and date-based dashboard trends. Index builds happen when the app starts; on a large production database, monitor the first deployment for index-build time.
+- The cards-issued/redemptions chart is at the bottom of the dashboard, after store summary cards. Hover or keyboard-focus a chart point to see the date and both series counts. The trends endpoint includes `duration_ms` for measuring backend query time.

@@ -1,4 +1,4 @@
-import os, hashlib, secrets, json, subprocess, re
+import os, hashlib, secrets, json, subprocess, re, time, logging
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from reportlab.pdfgen import canvas
+
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger("smartcoins")
 
 BASE = Path(__file__).resolve().parent
 RECEIPTS = BASE / 'receipts'; RECEIPTS.mkdir(exist_ok=True)
@@ -27,6 +30,7 @@ def db_error_handler(request: Request, exc: PyMongoError):
 
 @app.exception_handler(Exception)
 def generic_error_handler(request: Request, exc: Exception):
+    logger.error('Unhandled API error on %s %s', request.method, request.url.path, exc_info=(type(exc), exc, exc.__traceback__))
     return JSONResponse(status_code=500, content={'detail': 'Something went wrong on the server. Please try again, and let an admin know if it keeps happening.'})
 
 STORES = {
@@ -201,6 +205,15 @@ def ensure_indexes():
     db.members.create_index([('active', ASCENDING), ('anniversary', ASCENDING)])
     db.members.create_index([('created_at', ASCENDING)])
     db.redemptions.create_index([('status', ASCENDING), ('created_at', ASCENDING)])
+    # Query-aligned compound indexes for dashboard, inactivity reminders and balance lookups.
+    # Keep the existing indexes above for backward compatibility; these target common filter/sort paths.
+    db.members.create_index([('active', ASCENDING), ('created_at', DESCENDING)])
+    db.earnings.create_index([('status', ASCENDING), ('store', ASCENDING)])
+    db.earnings.create_index([('member_id', ASCENDING), ('bill_date', DESCENDING)])
+    db.redemptions.create_index([('status', ASCENDING), ('store', ASCENDING)])
+    db.redemptions.create_index([('member_id', ASCENDING), ('bill_date', DESCENDING)])
+    db.coin_lots.create_index([('status', ASCENDING), ('available_on', ASCENDING), ('expiry_on', ASCENDING), ('remaining_coins', ASCENDING)])
+    db.coin_lots.create_index([('status', ASCENDING), ('expiry_on', ASCENDING), ('member_id', ASCENDING)])
     db.sessions.create_index('token', unique=True)
     # Seed the four required accounts if missing. Passwords are stored only as hashes.
     for cfg in DEFAULT_USERS.values():
@@ -602,7 +615,8 @@ def receipt(filename: str, authorization: str | None = Header(None)):
 
 @app.get('/dashboard')
 def dashboard(authorization: str | None = Header(None)):
-    u = auth(authorization); require_admin(u); expire_old()
+    # Dashboard is read-only: do not scan and mutate every expired coin lot on each refresh.
+    u = auth(authorization); require_admin(u)
     earnings_by_store = {x['_id']: x for x in db.earnings.aggregate([
         {'$match': {'status': {'$ne': 'REVERSED'}}},
         {'$group': {'_id': '$store', 'sales': {'$sum': '$amount'}, 'coins': {'$sum': '$coins'}}}
@@ -643,6 +657,7 @@ def dashboard_trends(start_date: str, end_date: str, authorization: str | None =
     if (end - start).days > 366: raise HTTPException(400, 'Please select a date range of 366 days or less.')
     start_dt = datetime.combine(start, datetime.min.time())
     end_dt = datetime.combine(end + timedelta(days=1), datetime.min.time())
+    started = time.perf_counter()
     issued_rows = db.members.aggregate([
         {'$match': {'created_at': {'$gte': start_dt, '$lt': end_dt}}},
         {'$group': {'_id': {'$dateToString': {'format': '%Y-%m-%d', 'date': '$created_at'}}, 'count': {'$sum': 1}}},
@@ -659,7 +674,7 @@ def dashboard_trends(start_date: str, end_date: str, authorization: str | None =
         key = current.isoformat()
         days.append({'date': key, 'cards_issued': issued.get(key, 0), 'redemptions': redeemed.get(key, 0)})
         current += timedelta(days=1)
-    return {'start_date': start.isoformat(), 'end_date': end.isoformat(), 'days': days}
+    return {'start_date': start.isoformat(), 'end_date': end.isoformat(), 'days': days, 'duration_ms': round((time.perf_counter() - started) * 1000)}
 
 
 @app.get('/reminders/templates')
