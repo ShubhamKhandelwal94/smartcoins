@@ -244,11 +244,11 @@ tbody tr:hover{background:var(--panel2)}
 
     <div class="view" id="view-reminders">
       <div class="topline"><h2>WhatsApp Reminders</h2></div>
-      <p style="color:var(--muted);font-size:13px;max-width:760px">Manage SKG ONE WhatsApp communication templates and review members who qualify for reminders. Select a template to preview the message and open WhatsApp with a personalised message.</p>
+      <p style="color:var(--muted);font-size:13px;max-width:760px">Find members who qualify for a reminder, review their personalised message, and open WhatsApp. The member list loads automatically. WhatsApp requires staff to press Send.</p>
       <div class="toolbar" style="align-items:end">
         <div><label style="margin:0">Template</label><select id="remTemplate" style="min-width:280px"></select></div>
         <button class="btn secondary" onclick="previewReminderTemplate()">Preview</button>
-        <button class="btn" onclick="findSelectedReminderMembers()">Find qualifying members</button>
+        <button class="btn" id="findReminderBtn" onclick="findSelectedReminderMembers()">Find qualifying members</button>
       </div>
       <div class="reminder-grid">
         <div class="card reminder-card">
@@ -258,9 +258,9 @@ tbody tr:hover{background:var(--panel2)}
         </div>
         <div class="card reminder-card">
           <div class="section-title">Qualification</div>
-          <div id="reminderQualification" class="trigger-note">Choose a template and click “Find qualifying members”.</div>
+          <div id="reminderQualification" class="trigger-note">Loading qualifying members…</div>
           <div class="toolbar" style="margin:14px 0 0"><label style="margin:0">Inactivity days</label><input id="remDays" type="number" value="40" min="1" style="width:80px"><button class="btn secondary" onclick="findSelectedReminderMembers()">Find</button></div>
-          <div class="trigger-note">Date-based reminders are evaluated against today's IST date. Event reminders are generated immediately after the successful event and return a personalised WhatsApp link.</div>
+          <div class="trigger-note">Member reminders search live records. Open WhatsApp reviews the personalised message; staff must press Send. Event messages appear after the membership, credit or redemption action succeeds.</div>
         </div>
       </div>
       <table><thead><tr><th>Card</th><th>Name</th><th>Qualification</th><th>Eligible</th><th>WhatsApp</th></tr></thead>
@@ -494,31 +494,45 @@ async function downloadReceipt(name){
 }
 
 async function loadReminderTemplates(){
+  const select = document.getElementById('remTemplate');
+  select.innerHTML = '<option value="">Loading reminders…</option>';
   try{
-    const templates = await api('/reminders/templates');
-    const select = document.getElementById('remTemplate');
-    select.innerHTML = templates.map(t => `<option value="${t.key}">${t.title}</option>`).join('');
-    select.onchange = previewReminderTemplate;
-    previewReminderTemplate();
-  }catch(e){ toast(e.message, true); }
+    reminderTemplatesCache = await api('/reminders/templates');
+    const scheduled = reminderTemplatesCache.filter(t => !isEventReminder(t.key));
+    const events = reminderTemplatesCache.filter(t => isEventReminder(t.key));
+    select.innerHTML =
+      '<optgroup label="Member reminders">' +
+      scheduled.map(t => `<option value="${t.key}">${t.title}</option>`).join('') +
+      '</optgroup><optgroup label="Event messages (generated after an action)">' +
+      events.map(t => `<option value="${t.key}">${t.title}</option>`).join('') +
+      '</optgroup>';
+    select.value = 'NO_TRANSACTION_40';
+    select.onchange = async () => { updateReminderControls(); await previewReminderTemplate(); };
+    updateReminderControls();
+    await previewReminderTemplate();
+    await findSelectedReminderMembers();
+  }catch(e){
+    select.innerHTML = '<option value="">Could not load reminders</option>';
+    document.getElementById('reminderQualification').textContent = 'Could not load reminder templates. ' + e.message;
+    toast(e.message, true);
+  }
 }
 let reminderTemplatesCache = [];
 function isEventReminder(key){ return ['MEMBERSHIP_CREATED','SMART_COINS_EARNED','SMART_COINS_REDEEMED'].includes(key); }
+function updateReminderControls(){
+  const key = document.getElementById('remTemplate').value;
+  const isInactive = key === 'NO_TRANSACTION_40';
+  document.getElementById('remDays').disabled = !isInactive;
+  document.getElementById('remDays').style.opacity = isInactive ? '1' : '.45';
+  document.getElementById('remDays').parentElement.style.display = isInactive ? 'flex' : 'none';
+  const btn = document.getElementById('findReminderBtn');
+  if(btn) btn.textContent = isEventReminder(key) ? 'How to generate link' : 'Find qualifying members';
+}
 function reminderQualificationLabel(key, m){
   if(key.startsWith('SMART_COINS_EXPIRING')) return `${m.qualifying_coins} coins expire on ${m.qualifying_date}`;
   if(key.startsWith('BIRTHDAY')) return `Birthday: ${m.event_date || m.qualifying_date}`;
   if(key.startsWith('ANNIVERSARY')) return `Anniversary: ${m.event_date || m.qualifying_date}`;
   return `No transaction since ${m.last_transaction || 'joining'}`;
-}
-async function loadReminderTemplates(){
-  try{
-    const templates = await api('/reminders/templates');
-    reminderTemplatesCache = templates;
-    const select = document.getElementById('remTemplate');
-    select.innerHTML = templates.map(t => `<option value="${t.key}">${t.title}</option>`).join('');
-    select.onchange = previewReminderTemplate;
-    previewReminderTemplate();
-  }catch(e){ toast(e.message, true); }
 }
 async function previewReminderTemplate(){
   try{
@@ -529,28 +543,59 @@ async function previewReminderTemplate(){
     document.getElementById('reminderPreview').textContent = t.message;
     document.getElementById('reminderTrigger').textContent = 'Trigger: ' + t.trigger;
     document.getElementById('reminderQualification').textContent = isEventReminder(key)
-      ? 'Event-triggered: the transaction/member action generates a personalised WhatsApp link immediately.'
-      : 'Date/inactivity-based: click “Find qualifying members” to run the live qualification query.';
+      ? 'This message is created after the matching action succeeds. It cannot produce a member list by itself.'
+      : 'Choose Find qualifying members to search your live member records. WhatsApp opens with a personalised message ready for review.';
   }catch(e){ toast(e.message, true); }
 }
 async function findSelectedReminderMembers(){
+  const button = document.getElementById('findReminderBtn');
+  if(button) button.disabled = true;
   try{
     const key = document.getElementById('remTemplate').value;
-    if(isEventReminder(key)){
-      document.getElementById('rrows').innerHTML = '<tr><td colspan="5" style="color:var(--muted)">This template is event-triggered. Perform the membership, bill credit or redemption event to generate its WhatsApp link.</td></tr>';
-      document.getElementById('reminderQualification').textContent = 'No scheduled qualification is needed for this template.';
+    const tb = document.getElementById('rrows');
+    tb.innerHTML = '';
+    if(!key){
+      document.getElementById('reminderQualification').textContent = 'Select a reminder template first.';
       return;
     }
-    const d = await api('/reminders/qualify/' + encodeURIComponent(key) + '?days=' + (remDays.value||40));
-    const tb = document.getElementById('rrows'); tb.innerHTML='';
+    if(isEventReminder(key)){
+      const hints = {
+        MEMBERSHIP_CREATED: 'Create a membership from the Members screen. After it succeeds, the result will include an Open WhatsApp link.',
+        SMART_COINS_EARNED: 'Complete a successful bill credit. The result will include an Open WhatsApp link.',
+        SMART_COINS_REDEEMED: 'Complete a successful redemption. The result will include an Open WhatsApp link.'
+      };
+      document.getElementById('reminderQualification').textContent = hints[key] || 'This is an event-triggered message.';
+      tb.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Event messages are generated by the successful membership, credit or redemption action. They do not have a scheduled qualifying list.</td></tr>';
+      return;
+    }
+    const days = Math.max(1, Math.min(3650, parseInt(document.getElementById('remDays').value, 10) || 40));
+    document.getElementById('remDays').value = days;
+    const d = await api('/reminders/qualify/' + encodeURIComponent(key) + '?days=' + days);
     document.getElementById('reminderQualification').textContent = `${d.count} member${d.count===1?'':'s'} qualify for ${d.title} as of today (IST).`;
-    d.members.forEach((m,i)=>{
-      const tr = document.createElement('tr'); tr.style.opacity=0; tr.style.animation = `fadein .3s var(--ease) ${i*0.03}s forwards`;
-      tr.innerHTML = `<td>${m.card_no}</td><td>${m.name}</td><td>${reminderQualificationLabel(key,m)}</td><td>${m.eligible_coins}</td><td><a href="${m.whatsapp_link}" target="_blank">Open WhatsApp</a></td>`;
-      tb.appendChild(tr);
+    if(!Array.isArray(d.members)) throw new Error('The server response did not include a member list. Check the deployment version and try again.');
+    if(!d.members.length){
+      tb.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No members qualify for this reminder today.</td></tr>';
+      return;
+    }
+    d.members.forEach(m=>{
+      const tr = document.createElement('tr');
+      const values = [m.card_no || '—', m.name || '—', reminderQualificationLabel(key,m), Number(m.eligible_coins || 0).toLocaleString('en-IN')];
+      values.forEach(value=>{ const td=document.createElement('td'); td.textContent=String(value); tr.appendChild(td); });
+      const action=document.createElement('td');
+      if(m.whatsapp_link && m.mobile){
+        const a=document.createElement('a'); a.href=m.whatsapp_link; a.target='_blank'; a.rel='noopener noreferrer'; a.textContent='Open WhatsApp'; action.appendChild(a);
+      }else{
+        action.textContent='No valid mobile number';
+      }
+      tr.appendChild(action); tb.appendChild(tr);
     });
-    if (!d.members.length) tb.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No members qualify for this reminder today.</td></tr>';
-  }catch(e){ toast(e.message, true); }
+  }catch(e){
+    document.getElementById('rrows').innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Could not load qualifying members.</td></tr>';
+    document.getElementById('reminderQualification').textContent = e.message || 'Could not load qualifying members.';
+    toast(e.message, true);
+  }finally{
+    if(button) button.disabled = false;
+  }
 }
 async function loadReminders(){ await findSelectedReminderMembers(); }
 

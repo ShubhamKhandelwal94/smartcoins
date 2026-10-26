@@ -354,19 +354,30 @@ def reminder_qualifiers(key, days=40):
         return sorted(out, key=lambda x: x['name'].lower())
 
     if key == 'NO_TRANSACTION_40':
+        days = max(1, min(3650, int(days or 40)))
         cutoff = today() - timedelta(days=days)
+        cutoff_iso = iso(cutoff)
         for m in db.members.find({'active': True}):
             dates = member_transaction_dates(m['_id'])
             created = m.get('created_at')
-            joined = created.date() if isinstance(created, datetime) else None
-            last = max(dates) if dates else (iso(joined) if joined else '')
-            if not last or last >= iso(cutoff):
+            joined = None
+            if isinstance(created, datetime):
+                joined = created.date()
+            elif isinstance(created, str):
+                try:
+                    joined = datetime.fromisoformat(created.replace('Z', '+00:00')).date()
+                except ValueError:
+                    try: joined = datetime.strptime(created[:10], '%Y-%m-%d').date()
+                    except ValueError: joined = None
+            last = max((str(x)[:10] for x in dates if x), default=(iso(joined) if joined else ''))
+            # Qualify on the cutoff date too: it means the member has reached N full calendar days.
+            if not last or last > cutoff_iso:
                 continue
             _, eligible, _ = balances(m['_id'])
             out.append({**reminder_action(key, m, balance=eligible, eligible_coins=eligible),
-                        'card_no': m['card_no'], 'name': m['name'], 'mobile': m['mobile'],
-                        'last_transaction': last, 'eligible_coins': eligible,
-                        'qualifying_date': iso(cutoff)})
+                        'card_no': m.get('card_no', ''), 'name': m.get('name', ''),
+                        'mobile': m.get('mobile', ''), 'last_transaction': last,
+                        'eligible_coins': eligible, 'qualifying_date': cutoff_iso})
         return sorted(out, key=lambda x: x['last_transaction'] or '')
     raise HTTPException(400, 'Unsupported reminder template.')
 
