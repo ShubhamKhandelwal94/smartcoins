@@ -89,6 +89,8 @@ nav{display:flex;flex-direction:column;gap:2px}
 .hero .num{font-size:56px;font-weight:560;line-height:1}
 .hero .label{color:var(--muted);font-size:13px;margin-bottom:10px}
 .stores{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
+.metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px;margin:0 0 28px}.metric{padding:16px 18px;min-width:0}.metric .metric-label{font-size:12px;color:var(--muted);margin-bottom:8px}.metric .metric-value{font-family:"Fraunces",Georgia,serif;font-size:25px;overflow-wrap:anywhere}.metric.expired{border-left:3px solid var(--rose)}.metric.positive{border-left:3px solid var(--teal)}
+.pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:16px 0 24px;color:var(--muted);font-size:13px}.pagination .controls{display:flex;gap:8px;align-items:center}.pagination select{width:auto;padding:8px}
 .store{padding:20px;position:relative;overflow:hidden}
 .store::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px}
 .store.s0::before{background:var(--gold)} .store.s1::before{background:var(--teal)} .store.s2::before{background:var(--rose)}
@@ -143,9 +145,9 @@ tbody tr:hover{background:var(--panel2)}
     <label>Server URL</label>
     <input id="apiBase" placeholder="https://your-api.onrender.com">
     <label>Username</label>
-    <input id="luser" value="GOVIND">
+    <input id="luser" autocomplete="username">
     <label>Password</label>
-    <input id="lpass" type="password" value="Govind@123">
+    <input id="lpass" type="password" autocomplete="current-password">
     <button class="btn block" id="loginBtn" onclick="doLogin()">Sign in</button>
     <div class="err" id="loginErr"></div>
   </div>
@@ -172,14 +174,16 @@ tbody tr:hover{background:var(--panel2)}
     <div class="view" id="view-dashboard">
       <div class="topline"><h2>Dashboard</h2><button class="btn secondary" onclick="loadDashboard()">Refresh</button></div>
       <div class="hero"><div class="num" id="heroMembers">0</div><div class="label">active members</div></div>
+      <div class="metrics-grid" id="dashboardMetrics"></div>
       <div class="stores" id="stores"></div>
     </div>
 
     <div class="view" id="view-members">
       <div class="topline"><h2>Members</h2><button class="btn" onclick="openNewMember()">New member</button></div>
-      <div class="toolbar"><input id="msearch" placeholder="Search by name, card or mobile" oninput="searchMembers()"></div>
+      <div class="toolbar"><input id="msearch" placeholder="Search by name, card or mobile" oninput="memberPage=1;searchMembers()"></div>
       <table><thead><tr><th>Card</th><th>Name</th><th>Mobile</th><th>Credited</th><th>Eligible</th><th>Redeemed</th><th id="memberActionHead" style="display:none">Admin</th></tr></thead>
         <tbody id="mrows"></tbody></table>
+      <div class="pagination" id="memberPagination"><span id="memberPageInfo">Loading members…</span><div class="controls"><label style="margin:0;display:flex;align-items:center;gap:8px">Rows <select id="memberPageSize" onchange="changeMemberPageSize()"><option>25</option><option selected>50</option><option>100</option></select></label><button class="btn secondary" id="membersPrev" onclick="changeMemberPage(-1)" disabled>Previous</button><button class="btn secondary" id="membersNext" onclick="changeMemberPage(1)" disabled>Next</button></div></div>
       <div class="panel card reveal" id="memberDetailPanel" style="margin-top:20px">
         <div class="topline"><h3 id="memberDetailTitle" style="margin:0">Member details</h3><button class="btn secondary" onclick="closeMemberDetails()">Close</button></div>
         <div class="formgrid">
@@ -400,35 +404,59 @@ function countUp(el, to){
 async function loadDashboard(){
   try{
     const d = await api('/dashboard');
-    countUp(document.getElementById('heroMembers'), d.members);
+    countUp(document.getElementById('heroMembers'), d.members || 0);
+    const m = d.metrics || {};
+    const fmt = n => Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:0});
+    const cards = [
+      ['Total coins issued',m.totalCoinsIssued], ['Available points',m.eligiblePoints],
+      ['Pending points',m.pendingPoints], ['Redeemed points',m.redeemedPoints],
+      ['Expired points',m.expiredPoints,'expired'], ['Points expiring in 30 days',m.expiringNext30Days,'expired'],
+      ['Redemption value', '₹'+fmt(m.redemptionValue)], ['Completed redemptions',m.redemptionCount]
+    ];
+    document.getElementById('dashboardMetrics').innerHTML = cards.map(([label,value,kind])=>
+      `<div class="card metric ${kind||''}"><div class="metric-label">${label}</div><div class="metric-value">${typeof value==='string'?value:fmt(value)}</div></div>`).join('');
     const wrap = document.getElementById('stores'); wrap.innerHTML='';
     d.stores.forEach((s,i)=>{
       wrap.insertAdjacentHTML('beforeend', `<div class="card store s${i}">
         <h3>${s.store}</h3>
-        <div class="row">Sales<b>₹${(s.sales||0).toLocaleString('en-IN',{maximumFractionDigits:0})}</b></div>
-        <div class="row">Coins issued<b>${(s.coins_issued||0).toLocaleString('en-IN')}</b></div>
-        <div class="row">Redemptions<b>${s.redemptions||0}</b></div>
-        <div class="row">Redemption value<b>₹${(s.redemption_value||0).toLocaleString('en-IN',{maximumFractionDigits:0})}</b></div>
+        <div class="row">Sales<b>₹${fmt(s.sales)}</b></div>
+        <div class="row">Coins issued<b>${fmt(s.coins_issued)}</b></div>
+        <div class="row">Redemptions<b>${fmt(s.redemptions)}</b></div>
+        <div class="row">Redemption value<b>₹${fmt(s.redemption_value)}</b></div>
       </div>`);
     });
   }catch(e){ toast(e.message, true); }
 }
 
-let searchTimer;
-function searchMembers(){
+let searchTimer, memberPage=1, memberTotalPages=1, memberRequestId=0;
+function changeMemberPage(delta){ memberPage=Math.max(1,Math.min(memberTotalPages,memberPage+delta)); searchMembers(true); }
+function changeMemberPageSize(){ memberPage=1; searchMembers(true); }
+function searchMembers(immediate=false){
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(async ()=>{
+  const run = async ()=>{
+    const requestId=++memberRequestId;
     try{
       const q = document.getElementById('msearch').value;
-      const d = await api('/members?q=' + encodeURIComponent(q));
+      const size = Number(document.getElementById('memberPageSize')?.value || 50);
+      const d = await api('/members?q=' + encodeURIComponent(q) + '&page=' + memberPage + '&page_size=' + size);
+      if(requestId!==memberRequestId) return;
+      const items=Array.isArray(d)?d:(d.items||[]);
+      memberTotalPages=Array.isArray(d)?1:(d.pages||1);
       document.getElementById('memberActionHead').style.display = ROLE==='ADMIN' ? '' : 'none';
-      document.getElementById('mrows').innerHTML = d.map(m=>`<tr>
-        <td>${m.card_no}</td><td>${m.name}</td><td>${m.mobile}</td>
-        <td>${m.credited}</td><td>${m.eligible}</td><td>${m.redeemed}</td>
-        ${ROLE==='ADMIN'?`<td><a href="#" onclick="openMemberDetails('${m.card_no}');return false">Edit / History</a></td>`:''}</tr>`).join('') || `<tr><td colspan="${ROLE==='ADMIN'?7:6}" style="color:var(--muted)">No members found</td></tr>`;
+      document.getElementById('mrows').innerHTML = items.map(m=>`<tr>
+        <td>${escapeHtml(m.card_no)}</td><td>${escapeHtml(m.name)}</td><td>${escapeHtml(m.mobile)}</td>
+        <td>${Number(m.credited||0).toLocaleString('en-IN')}</td><td>${Number(m.eligible||0).toLocaleString('en-IN')}</td><td>${Number(m.redeemed||0).toLocaleString('en-IN')}</td>
+        ${ROLE==='ADMIN'?`<td><a href="#" onclick="openMemberDetails('${String(m.card_no).replace(/'/g,"\\'")}');return false">Edit / History</a></td>`:''}</tr>`).join('') || `<tr><td colspan="${ROLE==='ADMIN'?7:6}" style="color:var(--muted)">No members found</td></tr>`;
+      const total=Array.isArray(d)?items.length:(d.total||0);
+      document.getElementById('memberPageInfo').textContent = total ? `Showing ${(memberPage-1)*size+1}–${Math.min(memberPage*size,total)} of ${total} members` : 'No members found';
+      document.getElementById('membersPrev').disabled=memberPage<=1;
+      document.getElementById('membersNext').disabled=memberPage>=memberTotalPages;
     }catch(e){ toast(e.message, true); }
-  }, 250);
+  };
+  if(immediate) run(); else searchTimer=setTimeout(run,250);
 }
+function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
 function openNewMember(){ document.getElementById('newMemberPanel').classList.add('open'); setTodayDates(); }
 async function createMember(){
   const waWindow = window.open('about:blank', '_blank');

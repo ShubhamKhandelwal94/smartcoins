@@ -150,7 +150,10 @@ def expire_old():
     d = iso(today())
     for lot in db.coin_lots.find({'status': 'ACTIVE', 'expiry_on': {'$lt': d}, 'remaining_coins': {'$gt': 0}}):
         left = lot['remaining_coins']
-        db.coin_lots.update_one({'_id': lot['_id']}, {'$set': {'status': 'EXPIRED', 'remaining_coins': 0}})
+        # Conditional update prevents concurrent requests from recording the same expiry twice.
+        changed = db.coin_lots.update_one({'_id': lot['_id'], 'status': 'ACTIVE', 'remaining_coins': {'$gt': 0}}, {'$set': {'status': 'EXPIRED', 'remaining_coins': 0}})
+        if not changed.modified_count:
+            continue
         db.expiry_log.insert_one({'lot_id': lot['_id'], 'expired_coins': left, 'expiry_date': lot['expiry_on'], 'created_at': now()})
         audit('COIN_EXPIRY', str(lot['_id']), f'expired={left};expiry={lot["expiry_on"]}')
 def member(card):
@@ -172,6 +175,14 @@ def ensure_indexes():
     db.earnings.create_index('bill_no', unique=True)
     db.redemptions.create_index('bill_no', unique=True)
     db.coin_lots.create_index([('status', ASCENDING), ('expiry_on', ASCENDING), ('remaining_coins', DESCENDING)])
+    db.coin_lots.create_index([('member_id', ASCENDING), ('status', ASCENDING), ('available_on', ASCENDING), ('expiry_on', ASCENDING)])
+    db.earnings.create_index([('member_id', ASCENDING), ('status', ASCENDING)])
+    db.earnings.create_index([('store', ASCENDING), ('status', ASCENDING)])
+    db.redemptions.create_index([('member_id', ASCENDING), ('status', ASCENDING)])
+    db.redemptions.create_index([('store', ASCENDING), ('status', ASCENDING)])
+    db.expiry_log.create_index([('created_at', DESCENDING)])
+    db.members.create_index([('active', ASCENDING), ('name', ASCENDING)])
+    db.members.create_index([('active', ASCENDING), ('card_no', ASCENDING)])
     db.members.create_index([('active', ASCENDING), ('dob', ASCENDING)])
     db.members.create_index([('active', ASCENDING), ('anniversary', ASCENDING)])
     db.sessions.create_index('token', unique=True)
@@ -204,12 +215,42 @@ def login(x: LoginReq):
     return {'token': t, 'username': u['username'], 'role': u['role'], 'store': u.get('store')}
 
 @app.get('/members')
-def members(q: str = '', authorization: str | None = Header(None)):
-    u = auth(authorization); expire_old(); rg = {'$regex': q, '$options': 'i'}; out = []
-    for m in db.members.find({'active': True, '$or': [{'card_no': rg}, {'name': rg}, {'mobile': rg}]}).sort('name', ASCENDING):
-        c, e, r = balances(m['_id'])
-        out.append({'card_no': m['card_no'], 'name': m['name'], 'mobile': m['mobile'], 'email': m.get('email', ''), 'address': m.get('address', ''), 'dob': m.get('dob', ''), 'anniversary': m.get('anniversary', ''), 'created_at': m.get('created_at').isoformat() if isinstance(m.get('created_at'), datetime) else m.get('created_at'), 'credited': c, 'eligible': e, 'redeemed': r, 'can_edit': u.get('role') == 'ADMIN', 'can_history': u.get('role') == 'ADMIN'})
-    return out
+def members(q: str = '', page: int = 1, page_size: int = 50, authorization: str | None = Header(None)):
+    """Paginated member listing; aggregate balances in batches to avoid N+1 queries."""
+    u = auth(authorization)
+    page = max(1, page)
+    page_size = min(100, max(10, page_size))
+    query = {'active': True}
+    if q.strip():
+        rg = {'$regex': re.escape(q.strip()), '$options': 'i'}
+        query['$or'] = [{'card_no': rg}, {'name': rg}, {'mobile': rg}]
+    total = db.members.count_documents(query)
+    found = list(db.members.find(query, {'card_no': 1, 'name': 1, 'mobile': 1, 'email': 1, 'address': 1, 'dob': 1, 'anniversary': 1, 'created_at': 1})
+                 .sort([('name', ASCENDING), ('_id', ASCENDING)]).skip((page-1)*page_size).limit(page_size))
+    ids = [m['_id'] for m in found]
+    by_id = {}
+    if ids:
+        today_iso = iso(today())
+        for row in db.coin_lots.aggregate([
+            {'$match': {'member_id': {'$in': ids}, 'status': {'$nin': ['REVERSED', 'EXPIRED']}}},
+            {'$group': {'_id': '$member_id', 'credited': {'$sum': '$coins'},
+                'eligible': {'$sum': {'$cond': [{'$and': [
+                    {'$eq': ['$status', 'ACTIVE']}, {'$lte': ['$available_on', today_iso]},
+                    {'$gte': ['$expiry_on', today_iso]}, {'$gt': ['$remaining_coins', 0]}
+                ]}, '$remaining_coins', 0]}}}}
+        ]):
+            by_id[row['_id']] = {'credited': int(row.get('credited', 0)), 'eligible': int(row.get('eligible', 0)), 'redeemed': 0}
+        for row in db.redemptions.aggregate([
+            {'$match': {'member_id': {'$in': ids}, 'status': 'COMPLETED'}},
+            {'$group': {'_id': '$member_id', 'redeemed': {'$sum': '$coins'}}}
+        ]):
+            by_id.setdefault(row['_id'], {'credited': 0, 'eligible': 0, 'redeemed': 0})['redeemed'] = int(row.get('redeemed', 0))
+    out = []
+    for m in found:
+        b = by_id.get(m['_id'], {'credited': 0, 'eligible': 0, 'redeemed': 0})
+        created = m.get('created_at')
+        out.append({'card_no': m['card_no'], 'name': m['name'], 'mobile': m['mobile'], 'email': m.get('email', ''), 'address': m.get('address', ''), 'dob': m.get('dob', ''), 'anniversary': m.get('anniversary', ''), 'created_at': created.isoformat() if isinstance(created, datetime) else created, **b, 'can_edit': u.get('role') == 'ADMIN', 'can_history': u.get('role') == 'ADMIN'})
+    return {'items': out, 'total': total, 'page': page, 'page_size': page_size, 'pages': (total + page_size - 1) // page_size}
 
 @app.post('/members')
 def create_member(x: MemberReq, authorization: str | None = Header(None)):
@@ -475,12 +516,34 @@ def receipt(filename: str, authorization: str | None = Header(None)):
 
 @app.get('/dashboard')
 def dashboard(authorization: str | None = Header(None)):
-    u = auth(authorization); require_admin(u); expire_old(); rows = []
-    for code, s in STORES.items():
-        e = list(db.earnings.aggregate([{'$match': {'store': code, 'status': {'$ne': 'REVERSED'}}}, {'$group': {'_id': None, 'sales': {'$sum': '$amount'}, 'coins': {'$sum': '$coins'}}}]))
-        r = list(db.redemptions.aggregate([{'$match': {'store': code, 'status': 'COMPLETED'}}, {'$group': {'_id': None, 'count': {'$sum': 1}, 'value': {'$sum': '$value'}, 'fresh': {'$sum': '$fresh_coins'}}}]))
-        rows.append({'store': s['name'], 'percentage': s['percentage'], 'sales': e[0]['sales'] if e else 0, 'coins_issued': e[0]['coins'] if e else 0, 'redemptions': r[0]['count'] if r else 0, 'redemption_value': r[0]['value'] if r else 0, 'fresh_coins': r[0]['fresh'] if r else 0})
-    return {'members': db.members.count_documents({'active': True}), 'stores': rows, 'role': u.get('role'), 'store': u.get('store')}
+    u = auth(authorization); require_admin(u); expire_old()
+    earnings_by_store = {x['_id']: x for x in db.earnings.aggregate([
+        {'$match': {'status': {'$ne': 'REVERSED'}}},
+        {'$group': {'_id': '$store', 'sales': {'$sum': '$amount'}, 'coins': {'$sum': '$coins'}}}
+    ])}
+    redemptions_by_store = {x['_id']: x for x in db.redemptions.aggregate([
+        {'$match': {'status': 'COMPLETED'}},
+        {'$group': {'_id': '$store', 'count': {'$sum': 1}, 'value': {'$sum': '$value'}, 'fresh': {'$sum': '$fresh_coins'}}}
+    ])}
+    rows = []
+    for code, store in STORES.items():
+        e = earnings_by_store.get(code, {}); r = redemptions_by_store.get(code, {})
+        rows.append({'store': store['name'], 'percentage': store['percentage'], 'sales': e.get('sales', 0), 'coins_issued': e.get('coins', 0), 'redemptions': r.get('count', 0), 'redemption_value': r.get('value', 0), 'fresh_coins': r.get('fresh', 0)})
+    day = iso(today()); cutoff = iso(today() + timedelta(days=30))
+    coin_rows = list(db.coin_lots.aggregate([{'$group': {'_id': None,
+        'totalIssued': {'$sum': {'$cond': [{'$ne': ['$status', 'REVERSED']}, '$coins', 0]}},
+        'eligiblePoints': {'$sum': {'$cond': [{'$and': [{'$eq': ['$status', 'ACTIVE']}, {'$lte': ['$available_on', day]}, {'$gte': ['$expiry_on', day]}, {'$gt': ['$remaining_coins', 0]}]}, '$remaining_coins', 0]}},
+        'pendingPoints': {'$sum': {'$cond': [{'$and': [{'$eq': ['$status', 'ACTIVE']}, {'$gt': ['$remaining_coins', 0]}, {'$gt': ['$available_on', day]}]}, '$remaining_coins', 0]}}
+    }}]))
+    redeemed = list(db.redemptions.aggregate([{'$match': {'status': 'COMPLETED'}}, {'$group': {'_id': None, 'points': {'$sum': '$coins'}, 'value': {'$sum': '$value'}, 'count': {'$sum': 1}}}]))
+    expired = list(db.expiry_log.aggregate([{'$group': {'_id': None, 'points': {'$sum': '$expired_coins'}, 'lots': {'$sum': 1}}}]))
+    expiring = list(db.coin_lots.aggregate([
+        {'$match': {'status': 'ACTIVE', 'remaining_coins': {'$gt': 0}, 'available_on': {'$lte': day}, 'expiry_on': {'$gte': day, '$lte': cutoff}}},
+        {'$group': {'_id': None, 'points': {'$sum': '$remaining_coins'}}}
+    ]))
+    cm = coin_rows[0] if coin_rows else {}; rd = redeemed[0] if redeemed else {}; ex = expired[0] if expired else {}
+    return {'members': db.members.count_documents({'active': True}), 'stores': rows, 'role': u.get('role'), 'store': u.get('store'),
+        'metrics': {'totalCoinsIssued': int(cm.get('totalIssued', 0)), 'eligiblePoints': int(cm.get('eligiblePoints', 0)), 'pendingPoints': int(cm.get('pendingPoints', 0)), 'redeemedPoints': int(rd.get('points', 0)), 'redemptionValue': rd.get('value', 0), 'redemptionCount': int(rd.get('count', 0)), 'expiredPoints': int(ex.get('points', 0)), 'expiredLots': int(ex.get('lots', 0)), 'expiringNext30Days': int((expiring[0] if expiring else {}).get('points', 0))}}
 
 @app.get('/reminders/templates')
 def reminder_templates(authorization: str | None = Header(None)):

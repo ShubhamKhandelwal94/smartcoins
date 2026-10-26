@@ -95,3 +95,13 @@ After uploading to GitHub, deploy the latest commit on Render. Confirm `MONGODB_
 ## Security note
 
 If a MongoDB connection string with a real password was previously committed or shared, treat it as exposed: rotate the database user's password in MongoDB Atlas and update `MONGODB_URI` in Render. Keep real connection strings only in local environment variables or hosting secrets. The included `.env.example` intentionally contains placeholders.
+
+## Performance, pagination, and dashboard metrics
+
+- `GET /members?q=<search>&page=1&page_size=50` returns `{items,total,page,page_size,pages}`. `page_size` is capped at 100. The Members screen includes Previous/Next controls and a 25/50/100 row selector.
+- Member balances are calculated in batched MongoDB aggregation queries for only the current page, replacing per-member balance queries.
+- Startup creates indexes for member sorting, coin-lot balance/expiry lookups, and store/member transaction summaries.
+- Dashboard store summaries aggregate earnings and redemptions once per collection. The dashboard also reports `totalCoinsIssued`, `eligiblePoints`, `pendingPoints`, `redeemedPoints`, `redemptionValue`, `redemptionCount`, `expiredPoints`, `expiredLots`, and `expiringNext30Days`.
+- `expiredPoints` is based on records in `expiry_log`; historic lots that expired before expiry logging existed will not be included until reconciled.
+
+For security, use a fresh MongoDB Atlas password and set `MONGODB_URI` only in your local environment or Render environment settings. Never commit a real connection string.
