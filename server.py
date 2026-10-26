@@ -189,8 +189,10 @@ def ensure_indexes():
     db.coin_lots.create_index([('status', ASCENDING), ('expiry_on', ASCENDING), ('remaining_coins', DESCENDING)])
     db.coin_lots.create_index([('member_id', ASCENDING), ('status', ASCENDING), ('available_on', ASCENDING), ('expiry_on', ASCENDING)])
     db.earnings.create_index([('member_id', ASCENDING), ('status', ASCENDING)])
+    db.earnings.create_index([('bill_date', DESCENDING), ('member_id', ASCENDING)])
     db.earnings.create_index([('store', ASCENDING), ('status', ASCENDING)])
     db.redemptions.create_index([('member_id', ASCENDING), ('status', ASCENDING)])
+    db.redemptions.create_index([('bill_date', DESCENDING), ('member_id', ASCENDING)])
     db.redemptions.create_index([('store', ASCENDING), ('status', ASCENDING)])
     db.expiry_log.create_index([('created_at', DESCENDING)])
     db.members.create_index([('active', ASCENDING), ('name', ASCENDING)])
@@ -447,27 +449,60 @@ def reminder_qualifiers(key, days=40):
         days = max(1, min(3650, int(days or 40)))
         cutoff = today() - timedelta(days=days)
         cutoff_iso = iso(cutoff)
-        for m in db.members.find({'active': True}):
-            dates = member_transaction_dates(m['_id'])
-            created = m.get('created_at')
-            joined = None
-            if isinstance(created, datetime):
-                joined = created.date()
-            elif isinstance(created, str):
-                try:
-                    joined = datetime.fromisoformat(created.replace('Z', '+00:00')).date()
-                except ValueError:
-                    try: joined = datetime.strptime(created[:10], '%Y-%m-%d').date()
-                    except ValueError: joined = None
-            last = max((str(x)[:10] for x in dates if x), default=(iso(joined) if joined else ''))
+
+        # Avoid the old N+1 pattern (two transaction queries + coin balance queries
+        # for every member). Aggregate latest transaction dates and eligible balances
+        # once per collection, then join the small result maps in Python.
+        latest_by_member = {}
+        for collection in (db.earnings, db.redemptions):
+            pipeline = [
+                {'$match': {'bill_date': {'$nin': [None, '']}}},
+                {'$group': {'_id': '$member_id', 'last_transaction': {'$max': '$bill_date'}}},
+            ]
+            for tx in collection.aggregate(pipeline, allowDiskUse=True):
+                mid = tx.get('_id')
+                raw = tx.get('last_transaction')
+                if mid is None or not raw:
+                    continue
+                value = raw.date().isoformat() if isinstance(raw, datetime) else str(raw)[:10]
+                if value and value > latest_by_member.get(mid, ''):
+                    latest_by_member[mid] = value
+
+        eligible_by_member = {}
+        eligible_pipeline = [
+            {'$match': {'status': 'ACTIVE', 'available_on': {'$lte': iso(today())},
+                        'expiry_on': {'$gte': iso(today())}, 'remaining_coins': {'$gt': 0}}},
+            {'$group': {'_id': '$member_id', 'eligible': {'$sum': '$remaining_coins'}}},
+        ]
+        for balance_row in db.coin_lots.aggregate(eligible_pipeline, allowDiskUse=True):
+            if balance_row.get('_id') is not None:
+                eligible_by_member[balance_row['_id']] = int(balance_row.get('eligible', 0) or 0)
+
+        for m in db.members.find({'active': True}, {'card_no': 1, 'name': 1, 'mobile': 1, 'created_at': 1}):
+            mid = m['_id']
+            last = latest_by_member.get(mid, '')
+            if not last:
+                created = m.get('created_at')
+                joined = None
+                if isinstance(created, datetime):
+                    joined = created.date()
+                elif isinstance(created, str):
+                    try:
+                        joined = datetime.fromisoformat(created.replace('Z', '+00:00')).date()
+                    except ValueError:
+                        try: joined = datetime.strptime(created[:10], '%Y-%m-%d').date()
+                        except ValueError: joined = None
+                last = iso(joined) if joined else ''
             # Qualify on the cutoff date too: it means the member has reached N full calendar days.
             if not last or last > cutoff_iso:
                 continue
-            _, eligible, _ = balances(m['_id'])
+            eligible = eligible_by_member.get(mid, 0)
             out.append({**reminder_action(key, m, balance=eligible, eligible_coins=eligible),
                         'card_no': m.get('card_no', ''), 'name': m.get('name', ''),
                         'mobile': m.get('mobile', ''), 'last_transaction': last,
-                        'eligible_coins': eligible, 'qualifying_date': cutoff_iso})
+                        'eligible_coins': eligible, 'qualifying_date': cutoff_iso,
+                        'has_valid_mobile': bool(normalized_whatsapp_number(m.get('mobile', ''))),
+            })
         return sorted(out, key=lambda x: x['last_transaction'] or '')
     raise HTTPException(400, 'Unsupported reminder template.')
 
@@ -601,11 +636,12 @@ def reminder_templates(authorization: str | None = Header(None)):
 
 @app.get('/reminders/qualify/{key}')
 def qualify_reminder(key: str, days: int = 40, authorization: str | None = Header(None)):
+    started = time.perf_counter()
     u = auth(authorization); require_admin(u)
     if key not in WHATSAPP_REMINDER_TEMPLATES or key in ('MEMBERSHIP_CREATED', 'SMART_COINS_EARNED', 'SMART_COINS_REDEEMED'):
         raise HTTPException(400, 'This reminder is event-triggered and does not have a scheduled qualification query.')
     rows = reminder_qualifiers(key, days=days)
-    result = {'key': key, 'title': WHATSAPP_REMINDER_TEMPLATES[key]['title'], 'count': len(rows), 'members': rows, 'as_of_ist': iso(today())}
+    result = {'key': key, 'title': WHATSAPP_REMINDER_TEMPLATES[key]['title'], 'count': len(rows), 'members': rows, 'as_of_ist': iso(today()), 'duration_ms': round((time.perf_counter() - started) * 1000)}
     if key in ('SMART_COINS_EXPIRING_30', 'SMART_COINS_EXPIRING_7'):
         window_days = 30 if key.endswith('_30') else 7
         start = today(); end = start + timedelta(days=window_days)

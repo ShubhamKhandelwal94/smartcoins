@@ -524,7 +524,8 @@ async function downloadReceipt(name){
 
 async function loadReminderTemplates(){
   const select = document.getElementById('remTemplate');
-  select.innerHTML = '<option value="">Loading reminders…</option>';
+  select.disabled = true;
+  select.innerHTML = '<option value="">⏳ Loading reminders…</option>';
   try{
     reminderTemplatesCache = await api('/reminders/templates');
     const scheduled = reminderTemplatesCache.filter(t => !isEventReminder(t.key));
@@ -544,6 +545,8 @@ async function loadReminderTemplates(){
     select.innerHTML = '<option value="">Could not load reminders</option>';
     document.getElementById('reminderQualification').textContent = 'Could not load reminder templates. ' + e.message;
     toast(e.message, true);
+  }finally{
+    select.disabled = false;
   }
 }
 let reminderTemplatesCache = [];
@@ -578,7 +581,9 @@ async function previewReminderTemplate(){
 }
 async function findSelectedReminderMembers(){
   const button = document.getElementById('findReminderBtn');
-  if(button) button.disabled = true;
+  const originalButtonText = button ? button.textContent : 'Find qualifying members';
+  if(button){ button.disabled = true; button.innerHTML = '<span class="spin" aria-hidden="true"></span> Finding members…'; }
+  const qualification = document.getElementById('reminderQualification');
   try{
     const key = document.getElementById('remTemplate').value;
     const tb = document.getElementById('rrows');
@@ -599,9 +604,11 @@ async function findSelectedReminderMembers(){
     }
     const days = Math.max(1, Math.min(3650, parseInt(document.getElementById('remDays').value, 10) || 40));
     document.getElementById('remDays').value = days;
+    qualification.innerHTML = '<span class="spin" aria-hidden="true"></span> Searching members and calculating eligible coins…';
+    tb.innerHTML = '<tr><td colspan="5" style="color:var(--muted)"><span class="spin" aria-hidden="true"></span> Loading qualifying members…</td></tr>';
     const d = await api('/reminders/qualify/' + encodeURIComponent(key) + '?days=' + days);
     const expiryWindow = key === 'SMART_COINS_EXPIRING_7' ? ' (coins expiring today through the next 7 days)' : key === 'SMART_COINS_EXPIRING_30' ? ' (coins expiring today through the next 30 days)' : '';
-    document.getElementById('reminderQualification').textContent = `${d.count} member${d.count===1?'':'s'} qualify for ${d.title} as of ${d.as_of_ist || 'today'} (IST)${expiryWindow}.`;
+    qualification.textContent = `${d.count} member${d.count===1?'':'s'} qualify for ${d.title} as of ${d.as_of_ist || 'today'} (IST)${expiryWindow}.` + (Number.isFinite(d.duration_ms) ? ` Search completed in ${(d.duration_ms/1000).toFixed(1)}s.` : '');
     if(!Array.isArray(d.members)) throw new Error('The server response did not include a member list. Check the deployment version and try again.');
     qualifiedReminderMembers = d.members.filter(m => m && m.mobile && m.whatsapp_link);
     whatsappBatchIndex = 0;
@@ -641,7 +648,7 @@ async function findSelectedReminderMembers(){
     document.getElementById('reminderQualification').textContent = e.message || 'Could not load qualifying members.';
     toast(e.message, true);
   }finally{
-    if(button) button.disabled = false;
+    if(button){ button.disabled = false; button.textContent = originalButtonText; }
   }
 }
 

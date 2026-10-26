@@ -116,3 +116,11 @@ The reminder API now returns expiry qualification diagnostics (`active_coin_lots
 ### WhatsApp reminders without an API
 
 Scheduled reminder lists are qualified by the existing reminder endpoint. The admin UI opens one prefilled WhatsApp chat at a time using the member's existing `wa.me` link. Staff must press **Send** in WhatsApp, then return to SmartCoins and click **Open next WhatsApp**. No WhatsApp Cloud API token, phone-number ID, or approved API template is required. The application cannot confirm that a message was sent or delivered. Browsers may block pop-ups; allow pop-ups for the SmartCoins site if needed.
+
+## Reminder API performance and loading indicators
+
+- `NO_TRANSACTION_40` qualification no longer performs transaction-date and coin-balance lookups separately for every member. It aggregates latest activity and eligible coin balances by member, then joins those results in memory.
+- Startup creates `bill_date` + `member_id` indexes on earnings and redemptions to support inactivity-reminder aggregation. The first deployment may take longer while MongoDB builds new indexes on existing data.
+- `GET /reminders/qualify/{key}` includes `duration_ms` to help measure backend qualification time. The frontend shows the server-side duration after a successful search.
+- The Reminders screen shows a spinner in the Find Qualifying Members button and results area while a query is running, disables repeated clicks, and shows a loading state while reminder templates are fetched.
+- These changes have been syntax-checked locally, but real performance depends on the deployed Render instance, MongoDB size, indexes and network latency. Compare the API's `duration_ms` with browser Network timing after deployment.
